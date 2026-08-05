@@ -2,12 +2,16 @@
 
 Fork notes (Wunderfrog): library + HTTP API for Home Assistant / LAN use.
 
+**One copy of the app code** — at the repo root. `ha-addon/` is only HA metadata (`config.yaml`, `run.sh`, flat `Dockerfile`). Pack when you deploy.
+
 | Piece | Role |
 |-------|------|
 | `yhk_printer.py` | Library (RFCOMM connect / print) |
 | `cat-printer.py` | CLI smoke test |
 | `api.py` | HTTP API (`GET /health`, `POST /print/text`, `POST /print/image`) |
-| `ha-addon/` | Home Assistant OS local add-on skeleton |
+| `Dockerfile` | Container build from repo root |
+| `ha-addon/` | HAOS add-on metadata only |
+| `scripts/pack-addon.*` | Builds `dist/cat_printer/` for `/addons` |
 
 ```bash
 pip install -r requirements.txt
@@ -22,7 +26,7 @@ curl -X POST http://localhost:8080/print/image -F "file=@images/Turtle.jpg"
 
 Env: `PRINTER_MAC`, `PRINTER_PORT`, `PRINTER_WIDTH`, `PRINTER_FONT`, `API_HOST`, `API_PORT`.
 
-On HAOS: copy `ha-addon/` into the HA `/addons` share as e.g. `cat_printer`, set printer MAC in add-on options, pass the USB BT dongle to the HA VM, pair the printer inside the add-on/host Bluetooth stack, then start the add-on. Point `print.wunderfrog.com` at it yourself.
+HAOS deploy: run `scripts/pack-addon.ps1` (or `.sh`), copy `dist/cat_printer` to the HA `/addons` share, set printer MAC in add-on options, USB BT dongle on the HA VM, pair the printer, start the add-on. DNS/Caddy yourself.
 
 ---
 
