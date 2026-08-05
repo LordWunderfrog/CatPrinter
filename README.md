@@ -1,5 +1,31 @@
 # YHK-Cat-Thermal-Printer
 
+Fork notes (Wunderfrog): library + HTTP API for Home Assistant / LAN use.
+
+| Piece | Role |
+|-------|------|
+| `yhk_printer.py` | Library (RFCOMM connect / print) |
+| `cat-printer.py` | CLI smoke test |
+| `api.py` | HTTP API (`GET /health`, `POST /print/text`, `POST /print/image`) |
+| `ha-addon/` | Home Assistant OS local add-on skeleton |
+
+```bash
+pip install -r requirements.txt
+python cat-printer.py --text "hello"
+python api.py   # http://0.0.0.0:8080
+```
+
+```bash
+curl -X POST http://localhost:8080/print/text -H "Content-Type: application/json" -d "{\"text\":\"hello\",\"font_size\":65}"
+curl -X POST http://localhost:8080/print/image -F "file=@images/Turtle.jpg"
+```
+
+Env: `PRINTER_MAC`, `PRINTER_PORT`, `PRINTER_WIDTH`, `PRINTER_FONT`, `API_HOST`, `API_PORT`.
+
+On HAOS: copy `ha-addon/` into the HA `/addons` share as e.g. `cat_printer`, set printer MAC in add-on options, pass the USB BT dongle to the HA VM, pair the printer inside the add-on/host Bluetooth stack, then start the add-on. Point `print.wunderfrog.com` at it yourself.
+
+---
+
 Mini **cat/rabbit** **thermal** printer of the **YHK** type
 
 <img src="https://raw.githubusercontent.com/abhigkar/YHK-Cat-Thermal-Printer/main/images/Cat-printer.jpeg"  width="300">
