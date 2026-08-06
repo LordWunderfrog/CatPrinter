@@ -3,7 +3,8 @@ from pathlib import Path
 
 import PIL.Image
 
-from markdown_renderer import make_qr_image, prepare_raster_image, render_markdown
+from markdown_renderer import make_qr_image, render_markdown
+from image_prep import prepare_raster_image
 
 ROOT = Path(__file__).resolve().parents[1]
 FONT = str(ROOT / "Lucon.ttf")

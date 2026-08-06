@@ -18,6 +18,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from markdown_renderer import render_markdown
+from image_prep import prepare_raster_image
 from yhk_printer import get_config, print_image, print_text, printer_session
 
 _print_lock = threading.Lock()
@@ -85,8 +86,8 @@ def print_markdown_endpoint(body: MarkdownPrintRequest):
 
 
 @app.post("/print/image")
-async def print_image_endpoint(file: UploadFile = File(...)):
-    raw = await file.read()
+def print_image_endpoint(file: UploadFile = File(...)):
+    raw = file.file.read()
     if not raw:
         raise HTTPException(status_code=400, detail="Empty file")
 
@@ -96,10 +97,13 @@ async def print_image_endpoint(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid image: {e}") from e
 
+    cfg = get_config()
+    prepared = prepare_raster_image(img, cfg["width"]).convert("1")
+
     with _print_lock:
         try:
             with printer_session() as soc:
-                print_image(soc, img)
+                print_image(soc, prepared)
         except OSError as e:
             raise HTTPException(status_code=502, detail=f"Printer connection failed: {e}") from e
         except Exception as e:

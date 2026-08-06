@@ -26,23 +26,24 @@ def get_config():
     }
 
 
-def connect(mac=None, port=None):
+def connect(mac=None, port=None, timeout=10.0):
     """Open RFCOMM socket to the printer. If mac/port are None, use get_config()."""
     cfg = get_config()
     mac = mac or cfg["mac"]
     port = port if port is not None else cfg["port"]
     s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
+    s.settimeout(timeout)
     s.connect((mac, port))
     return s
 
 
 @contextmanager
-def printer_session(probe=True):
+def printer_session(probe=True, timeout=10.0):
     """
     Open a printer connection, optionally probe status/serial/product, then close.
     Use for one-shot print jobs (CLI, API).
     """
-    s = connect()
+    s = connect(timeout=timeout)
     try:
         if probe:
             get_printer_status(s)
@@ -106,13 +107,19 @@ def _get_wrapped_text(text: str, font: PIL.ImageFont.ImageFont, line_length: int
 
 def create_text_image(text, width, font_path="Lucon.ttf", font_size=12):
     """Render text to a PIL Image sized for the printer (trimmed to content)."""
-    img = PIL.Image.new("RGB", (width, 5000), color=(255, 255, 255))
     font = PIL.ImageFont.truetype(font_path, font_size)
-    d = PIL.ImageDraw.Draw(img)
+    # Measure first so long jobs aren't silently clipped by a fixed canvas.
+    probe = PIL.Image.new("RGB", (width, 10), color=(255, 255, 255))
+    probe_draw = PIL.ImageDraw.Draw(probe)
     lines = []
-    for line in text.splitlines():
+    for line in text.splitlines() or [""]:
         lines.append(_get_wrapped_text(line, font, width))
-    d.text((0, 0), "\n".join(lines), fill=(0, 0, 0), font=font)
+    body = "\n".join(lines)
+    bbox = probe_draw.multiline_textbbox((0, 0), body, font=font)
+    height = max(bbox[3] - bbox[1] + 20, font_size + 20)
+    img = PIL.Image.new("RGB", (width, height), color=(255, 255, 255))
+    d = PIL.ImageDraw.Draw(img)
+    d.text((0, 0), body, fill=(0, 0, 0), font=font)
     return _trim_image(img)
 
 
@@ -120,23 +127,24 @@ def print_image(soc, im, width=None):
     """
     Send a PIL Image to the printer over the open socket.
     If width is None, use get_config()['width'].
+    Pre-dithered mode "1" images are sent without a second dither pass.
     """
     cfg = get_config()
     width = width if width is not None else cfg["width"]
 
     if im.width > width:
-        height = int(im.height * (width / im.width))
-        im = im.resize((width, height))
+        height = max(1, int(im.height * (width / im.width)))
+        im = im.resize((width, height), PIL.Image.Resampling.NEAREST if im.mode == "1" else PIL.Image.Resampling.LANCZOS)
 
     if im.width < width:
         padded_image = PIL.Image.new("1", (width, im.height), 1)
-        padded_image.paste(im)
+        padded_image.paste(im.convert("1") if im.mode != "1" else im)
         im = padded_image
 
     im = im.rotate(180)
 
     if im.mode != "1":
-        im = im.convert("1")
+        im = im.convert("1", dither=PIL.Image.Dither.FLOYDSTEINBERG)
 
     if im.size[0] % 8:
         im2 = PIL.Image.new(
@@ -145,8 +153,10 @@ def print_image(soc, im, width=None):
         im2.paste(im, (0, 0))
         im = im2
 
-    im = PIL.ImageOps.invert(im.convert("L"))
-    im = im.convert("1")
+    # Invert for this printer; keep binary (no dither) so pre-processed photos stay intact.
+    im = PIL.ImageOps.invert(im.convert("L")).convert(
+        "1", dither=PIL.Image.Dither.NONE
+    )
 
     buf = b"".join(
         (
@@ -160,7 +170,7 @@ def print_image(soc, im, width=None):
     sleep(0.5)
     _send_start_print_sequence(soc)
     sleep(0.5)
-    soc.send(buf)
+    soc.sendall(buf)
     sleep(0.5)
     _send_end_print_sequence(soc)
     sleep(0.5)

@@ -6,6 +6,7 @@ import sys
 
 import PIL.Image
 
+from image_prep import prepare_raster_image
 from yhk_printer import get_config, print_image, print_text, printer_session
 
 
@@ -20,10 +21,12 @@ def main():
                 text = " ".join(sys.argv[2:])
                 print_text(s, text, font_size=65)
             else:
-                img = PIL.Image.open(arg)
+                img = prepare_raster_image(PIL.Image.open(arg), cfg["width"]).convert("1")
                 print_image(s, img)
         else:
-            img = PIL.Image.open("images/Turtle.jpg")
+            img = prepare_raster_image(
+                PIL.Image.open("images/Turtle.jpg"), cfg["width"]
+            ).convert("1")
             print_image(s, img)
 
     print("Done.")

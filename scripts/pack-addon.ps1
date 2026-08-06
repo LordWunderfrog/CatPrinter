@@ -7,6 +7,7 @@ if (Test-Path $Out) { Remove-Item -Recurse -Force $Out }
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
 Copy-Item (Join-Path $Root "yhk_printer.py") $Out
+Copy-Item (Join-Path $Root "image_prep.py") $Out
 Copy-Item (Join-Path $Root "api.py") $Out
 Copy-Item (Join-Path $Root "cat-printer.py") $Out
 Copy-Item (Join-Path $Root "markdown_renderer.py") $Out

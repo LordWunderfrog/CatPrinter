@@ -20,11 +20,10 @@ from urllib.parse import urlparse
 import mistune
 import PIL.Image
 import PIL.ImageDraw
-import PIL.ImageEnhance
-import PIL.ImageFilter
 import PIL.ImageFont
-import PIL.ImageOps
 import qrcode
+
+from image_prep import prepare_raster_image
 
 # ---------------------------------------------------------------------------
 # Styles — swap sizes/paths later without touching layout logic
@@ -195,28 +194,6 @@ def _load_http(url: str) -> PIL.Image.Image | None:
     img = PIL.Image.open(io.BytesIO(data))
     img.load()
     return img.convert("RGB")
-
-
-def _fit_image(im: PIL.Image.Image, max_width: int) -> PIL.Image.Image:
-    if im.width <= max_width:
-        return im
-    height = max(1, int(im.height * (max_width / im.width)))
-    return im.resize((max_width, height), PIL.Image.Resampling.LANCZOS)
-
-
-def prepare_raster_image(im: PIL.Image.Image, max_width: int) -> PIL.Image.Image:
-    """
-    Photo/meme path: fit, autocontrast, sharpen, light contrast, Floyd–Steinberg.
-    Returns an L image with only 0/255 values (safe to paste onto the page canvas).
-    Text/QR stay hard-thresholded elsewhere — do not use this for those.
-    """
-    fitted = _fit_image(im.convert("RGB"), max_width)
-    gray = PIL.ImageOps.grayscale(fitted)
-    gray = PIL.ImageOps.autocontrast(gray, cutoff=2)
-    gray = gray.filter(PIL.ImageFilter.SHARPEN)
-    gray = PIL.ImageEnhance.Contrast(gray).enhance(1.15)
-    bw = gray.convert("1", dither=PIL.Image.Dither.FLOYDSTEINBERG)
-    return bw.convert("L")
 
 
 # ---------------------------------------------------------------------------

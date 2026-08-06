@@ -7,6 +7,7 @@ Fork notes (Wunderfrog): library + HTTP API for Home Assistant / LAN use.
 | Piece | Role |
 |-------|------|
 | `yhk_printer.py` | Library (RFCOMM connect / print) |
+| `image_prep.py` | Shared photo prep (EXIF, dither) |
 | `cat-printer.py` | CLI smoke test |
 | `api.py` | HTTP API (`/health`, `/print/text`, `/print/markdown`, `/print/image`) |
 | `markdown_renderer.py` | Mistune AST → 384px 1-bit image |
