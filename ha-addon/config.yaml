@@ -1,5 +1,5 @@
 name: Cat Printer
-version: "1.0.0"
+version: "1.1.0"
 slug: cat_printer
 description: YHK classic Bluetooth thermal printer HTTP API
 url: https://github.com/LordWunderfrog/CatPrinter
@@ -20,8 +20,12 @@ options:
   printer_mac: "25:00:27:00:1B:D5"
   printer_port: 2
   api_port: 8080
+  api_token: ""
+  default_subreddit: "chonkers"
 schema:
   printer_mac: str
   printer_port: int
   api_port: int
+  api_token: password
+  default_subreddit: str
 map: []

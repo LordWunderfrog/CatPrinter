@@ -9,7 +9,8 @@ Fork notes (Wunderfrog): library + HTTP API for Home Assistant / LAN use.
 | `yhk_printer.py` | Library (RFCOMM connect / print) |
 | `image_prep.py` | Shared photo prep (EXIF, dither) |
 | `cat-printer.py` | CLI smoke test |
-| `api.py` | HTTP API (`/health`, `/print/text`, `/print/markdown`, `/print/image`) |
+| `reddit_image.py` | Random hot-image pick from a subreddit |
+| `api.py` | HTTP API (`/health`, `/ready`, `/print/*`) |
 | `markdown_renderer.py` | Mistune AST → 384px 1-bit image |
 | `Dockerfile` | Container build from repo root |
 | `ha-addon/` | HAOS add-on metadata only |
@@ -22,16 +23,35 @@ python api.py   # http://0.0.0.0:8080
 ```
 
 ```bash
+curl http://localhost:8080/health
+curl http://localhost:8080/ready
 curl -X POST http://localhost:8080/print/text -H "Content-Type: application/json" -d "{\"text\":\"hello\",\"font_size\":65}"
 curl -X POST http://localhost:8080/print/markdown -H "Content-Type: application/json" -d "{\"markdown\":\"# List\\n\\n- milk\\n- eggs\"}"
 curl -X POST http://localhost:8080/print/image -F "file=@images/Turtle.jpg"
+curl -X POST http://localhost:8080/print/reddit -H "Content-Type: application/json" -d "{}"
 ```
+
+PowerShell (preferred on Windows):
+
+```powershell
+Invoke-RestMethod http://localhost:8080/health
+Invoke-RestMethod http://localhost:8080/ready
+Invoke-RestMethod -Method Post -Uri http://localhost:8080/print/reddit -ContentType 'application/json' -Body (@{ subreddit = 'aww' } | ConvertTo-Json)
+# If API_TOKEN is set:
+Invoke-RestMethod -Method Post -Uri http://localhost:8080/print/reddit -ContentType 'application/json' -Headers @{ 'X-Api-Key' = 'your-token' } -Body '{}'
+```
+
+**Auth:** if `API_TOKEN` is set, `/print/*` requires `X-Api-Key` or `Authorization: Bearer …`. `/health` and `/ready` stay open (HA / NFC liveness). Leave token empty for open LAN during early bring-up.
+
+**Ready:** `GET /ready` probes RFCOMM — `printer: awake|busy` (200) or `sleepy` (503). Use before automations that hate silent failures.
+
+**Reddit** (`POST /print/reddit`): random printable pic via [Pullpush](https://pullpush.io/); default subreddit from `DEFAULT_SUBREDDIT` (HA option / env; default `chonkers`). Override with JSON `subreddit`.
 
 **Markdown:** headings, paragraphs, bold/italic/strike, code, nested lists, task boxes, blockquotes, HR, tables, images (http/data/local; autocontrast+sharpen+Floyd–Steinberg dither), links as label + two-column end-of-paragraph QR (deduped), and ` ```qr ` fences. Text/QR stay hard-thresholded.
 
-Env: `PRINTER_MAC`, `PRINTER_PORT`, `PRINTER_WIDTH`, `PRINTER_FONT`, `API_HOST`, `API_PORT`.
+Env: `PRINTER_MAC`, `PRINTER_PORT`, `PRINTER_WIDTH`, `PRINTER_FONT`, `API_HOST`, `API_PORT`, `API_TOKEN`, `DEFAULT_SUBREDDIT`, plus optional ceilings `MAX_TEXT_CHARS`, `MAX_MARKDOWN_CHARS`, `MAX_UPLOAD_BYTES`, `MAX_IMAGE_PIXELS`.
 
-HAOS deploy: run `scripts/pack-addon.ps1` (or `.sh`), copy `dist/cat_printer` to the HA `/addons` share, set printer MAC in add-on options, USB BT dongle on the HA VM, pair the printer, start the add-on. DNS/Caddy yourself.
+HAOS deploy: run `scripts/pack-addon.ps1` (or `.sh`), copy `dist/cat_printer` to the HA `/addons` share, set printer MAC / optional token / default subreddit in add-on options, USB BT dongle on the HA VM, pair the printer, start the add-on. DNS/Caddy yourself.
 
 ---
 
