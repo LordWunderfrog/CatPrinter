@@ -25,13 +25,24 @@ MAX_PRINT_QUEUE = int(os.environ.get("MAX_PRINT_QUEUE", "32"))
 SPOOL_TTL_S = float(os.environ.get("SPOOL_TTL_S", str(7 * 24 * 3600)))
 # While jobs are parked (printer sleepy), retry drain on this interval — not when empty.
 SPOOL_RETRY_S = float(os.environ.get("SPOOL_RETRY_S", "120"))
-# Brief pause between jobs so RFCOMM can release (avoids EBUSY mid-drain).
-SPOOL_INTER_JOB_GAP_S = float(os.environ.get("SPOOL_INTER_JOB_GAP_S", "1.5"))
+# After RFCOMM "done", wait for the mechanism to finish feeding before the next job.
+# settle_s = max(SPOOL_INTER_JOB_GAP_S, image_height / SPOOL_PX_PER_SEC)
+SPOOL_INTER_JOB_GAP_S = float(os.environ.get("SPOOL_INTER_JOB_GAP_S", "2.0"))
+SPOOL_PX_PER_SEC = float(os.environ.get("SPOOL_PX_PER_SEC", "55"))
 QUEUE_PRINT_FAIL_LIMIT = int(os.environ.get("QUEUE_PRINT_FAIL_LIMIT", "3"))
 
 
 class QueueFull(Exception):
     """Spool rejected a new job (at capacity)."""
+
+
+def _mech_settle_s(height_px: int) -> float:
+    """
+    RFCOMM 'done' is not mechanical done. Estimate feed time from raster height.
+    """
+    if height_px <= 0 or SPOOL_PX_PER_SEC <= 0:
+        return max(0.0, SPOOL_INTER_JOB_GAP_S)
+    return max(SPOOL_INTER_JOB_GAP_S, float(height_px) / SPOOL_PX_PER_SEC)
 
 
 def _default_spool_dir() -> Path:
@@ -127,7 +138,8 @@ class PrintSpool:
     def try_drain(self, *, reason: str) -> dict[str, Any]:
         """
         Print pending jobs FIFO until empty or printer unavailable.
-        Safe to call from wake/status/enqueue; concurrent drains no-op.
+        Re-lists the spool after each job so mid-drain enqueues are not skipped.
+        Waits for mechanical feed after each RFCOMM send before starting the next.
         """
         if not self._drain_lock.acquire(blocking=False):
             log.info("event=spool_drain_skip reason=%s detail=already_draining", reason)
@@ -137,7 +149,11 @@ class PrintSpool:
         stopped = None
         try:
             self._expire_old()
-            for json_path in self._pending_json_paths():
+            while True:
+                paths = self._pending_json_paths()
+                if not paths:
+                    break
+                json_path = paths[0]
                 job_id = json_path.stem
                 png_path = self.root / f"{job_id}.png"
                 try:
@@ -197,20 +213,25 @@ class PrintSpool:
                     stopped = "crash"
                     break
 
-                waited = int(time.time() - float(payload.get("enqueued_at") or time.time()))
+                waited = int(
+                    time.time() - float(payload.get("enqueued_at") or time.time())
+                )
+                settle = _mech_settle_s(img.height)
                 log.info(
                     "event=spool_print_ok job_id=%s kind=%s req_id=%s waited_s=%s "
-                    "reason=%s",
+                    "reason=%s settle_s=%s height=%s",
                     job_id,
                     kind,
                     req_id,
                     waited,
                     reason,
+                    round(settle, 1),
+                    img.height,
                 )
                 self._drop(job_id)
                 drained += 1
-                if SPOOL_INTER_JOB_GAP_S > 0:
-                    time.sleep(SPOOL_INTER_JOB_GAP_S)
+                if settle > 0:
+                    time.sleep(settle)
         finally:
             self._drain_lock.release()
 
