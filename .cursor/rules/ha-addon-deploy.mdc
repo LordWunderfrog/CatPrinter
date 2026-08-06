@@ -23,6 +23,10 @@ App code lives at repo root; `ha-addon/` is metadata only. HA runs a packed copy
 4. Optional: sync `ha/cat_printer.yaml` to `\\home.lan\config\packages\` only when that package changed — separate from add-on pack.
 5. At a significant checkpoint (feature landed, deploy shipped, clear stop): commit and push to `origin` without waiting to be asked.
 
+## Auth note
+
+When `API_TOKEN` is set, `/print/*` **and** `/printer/wake` require the token. `/health`, `/ready`, `/status` stay open. HA package sends `X-Api-Key: !secret cat_printer_api_token` on wake/print rest_commands.
+
 ## Do not
 
 - Duplicate app files under `ha-addon/`

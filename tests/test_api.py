@@ -7,6 +7,7 @@ from api import (
     TextPrintRequest,
     _default_subreddit,
     _extract_token,
+    _path_requires_auth,
 )
 
 
@@ -16,6 +17,14 @@ def test_extract_token_from_headers():
     assert _extract_token(None, "key-from-header") == "key-from-header"
     assert _extract_token(None, None) is None
     assert _extract_token("Basic nope", None) is None
+
+
+def test_auth_paths():
+    assert _path_requires_auth("/print/reddit")
+    assert _path_requires_auth("/printer/wake")
+    assert not _path_requires_auth("/status")
+    assert not _path_requires_auth("/ready")
+    assert not _path_requires_auth("/health")
 
 
 def test_text_rejects_absurd_size():

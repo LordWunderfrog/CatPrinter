@@ -2,6 +2,7 @@
 from pathlib import Path
 
 import PIL.Image
+import pytest
 
 from markdown_renderer import make_qr_image, render_markdown
 from image_prep import prepare_raster_image
@@ -133,3 +134,29 @@ def test_wide_table_not_rejected():
     img = render_markdown(md, width=WIDTH, font_path=FONT)
     assert img.size[0] == WIDTH
     assert img.mode == "1"
+
+
+def test_local_image_paths_blocked_by_default(tmp_path):
+    from markdown_renderer import load_image
+
+    p = tmp_path / "secret.png"
+    PIL.Image.new("RGB", (8, 8), (0, 0, 0)).save(p)
+    assert load_image(str(p)) is None
+    assert load_image(str(p), allow_local=True) is not None
+
+
+def test_render_rejects_absurd_height():
+    from markdown_renderer import RenderTooTall
+
+    md = "\n\n".join(f"line {i}" for i in range(400))
+    with pytest.raises(RenderTooTall):
+        render_markdown(md, width=WIDTH, font_path=FONT, max_height=100)
+
+
+def test_private_host_rejected():
+    from markdown_renderer import _host_is_public
+
+    assert not _host_is_public("localhost")
+    assert not _host_is_public("127.0.0.1")
+    assert not _host_is_public("192.168.1.1")
+    assert _host_is_public("example.com")

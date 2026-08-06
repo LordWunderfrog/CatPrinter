@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import base64
 import io
+import ipaddress
 import re
+import socket
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -153,8 +155,11 @@ def make_qr_image(payload: str, max_side: int) -> PIL.Image.Image | None:
         return None
 
 
-def load_image(src: str) -> PIL.Image.Image | None:
-    """Load image from http(s), data URI, or local path. None on failure."""
+def load_image(src: str, *, allow_local: bool = False) -> PIL.Image.Image | None:
+    """
+    Load image from http(s) or data URI.
+    Local filesystem paths only when allow_local=True (CLI/tests — never API Markdown).
+    """
     if not src:
         return None
     try:
@@ -163,7 +168,15 @@ def load_image(src: str) -> PIL.Image.Image | None:
         parsed = urlparse(src)
         if parsed.scheme in ("http", "https"):
             return _load_http(src)
+        # Windows paths parse as scheme="c"; treat single-letter schemes as drives.
+        drive_scheme = len(parsed.scheme) == 1 and parsed.scheme.isalpha()
+        if parsed.scheme and parsed.scheme not in ("", "file") and not drive_scheme:
+            return None
+        if not allow_local:
+            return None
         path = Path(src)
+        if parsed.scheme == "file":
+            path = Path(parsed.path)
         if path.is_file():
             img = PIL.Image.open(path)
             img.load()
@@ -185,9 +198,45 @@ def _load_data_uri(src: str) -> PIL.Image.Image | None:
     return img.convert("RGB")
 
 
+def _host_is_public(hostname: str) -> bool:
+    """Reject localhost / private / link-local / metadata-ish targets (best-effort)."""
+    host = (hostname or "").strip().lower().rstrip(".")
+    if not host or host == "localhost" or host.endswith(".localhost"):
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return False
+    for info in infos:
+        raw = info[4][0]
+        try:
+            ip = ipaddress.ip_address(raw)
+        except ValueError:
+            continue
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            return False
+    return True
+
+
 def _load_http(url: str) -> PIL.Image.Image | None:
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return None
+    if not _host_is_public(parsed.hostname):
+        return None
     req = urllib.request.Request(url, headers={"User-Agent": "CatPrinter/1.0"})
     with urllib.request.urlopen(req, timeout=IMAGE_TIMEOUT_S) as resp:
+        # Refuse redirects onto private nets (urlopen follows redirects).
+        final = urlparse(resp.geturl())
+        if final.hostname and not _host_is_public(final.hostname):
+            return None
         data = resp.read(IMAGE_MAX_BYTES + 1)
     if len(data) > IMAGE_MAX_BYTES:
         return None
@@ -489,7 +538,14 @@ def _paste_gray(
 
 
 class _Layout:
-    def __init__(self, width: int, styles: StyleSheet, font_path: str):
+    def __init__(
+        self,
+        width: int,
+        styles: StyleSheet,
+        font_path: str,
+        *,
+        allow_local_images: bool = False,
+    ):
         self.width = width
         self.styles = styles
         self.cache = FontCache(font_path)
@@ -500,6 +556,7 @@ class _Layout:
         self._seen_urls: set[str] = set()
         self._pending_table_links: list[str] = []
         self._pending_table_images: list[tuple[str, str]] = []
+        self.allow_local_images = allow_local_images
 
     def _content_left(self, indent: int = 0, quote_depth: int = 0) -> int:
         return (
@@ -714,7 +771,7 @@ class _Layout:
     def _emit_image(self, url: str, alt: str, indent: int, quote_depth: int) -> None:
         max_w = int(self._max_width(indent, quote_depth))
         left = self._content_left(indent, quote_depth)
-        loaded = load_image(url)
+        loaded = load_image(url, allow_local=self.allow_local_images)
         if loaded is None:
             if alt:
                 self._emit_runs(
@@ -1033,11 +1090,17 @@ class _Layout:
 # ---------------------------------------------------------------------------
 
 
+class RenderTooTall(ValueError):
+    """Layout height exceeds the hard safety ceiling."""
+
+
 def layout_markdown(
     markdown: str,
     width: int,
     font_path: str,
     styles: StyleSheet | None = None,
+    *,
+    allow_local_images: bool = False,
 ) -> LayoutResult:
     styles = styles or StyleSheet(font_path=font_path)
     if not styles.font_path:
@@ -1045,7 +1108,12 @@ def layout_markdown(
     ast = _parser()(markdown)
     if not isinstance(ast, list):
         ast = []
-    lay = _Layout(width=width, styles=styles, font_path=styles.font_path)
+    lay = _Layout(
+        width=width,
+        styles=styles,
+        font_path=styles.font_path,
+        allow_local_images=allow_local_images,
+    )
     lay.layout_nodes(ast)
     height = max(int(lay.y + styles.margin), styles.margin * 2 + 1)
     return LayoutResult(width=width, height=height, ops=lay.ops)
@@ -1056,10 +1124,23 @@ def render_markdown(
     width: int,
     font_path: str,
     styles: StyleSheet | None = None,
+    *,
+    allow_local_images: bool = False,
+    max_height: int | None = None,
 ) -> PIL.Image.Image:
     """Return an exact-width, 1-bit printable image."""
     styles = styles or StyleSheet(font_path=font_path)
-    layout = layout_markdown(markdown, width, font_path, styles)
+    layout = layout_markdown(
+        markdown,
+        width,
+        font_path,
+        styles,
+        allow_local_images=allow_local_images,
+    )
+    if max_height is not None and layout.height > max_height:
+        raise RenderTooTall(
+            f"Rendered height {layout.height}px exceeds max {max_height}px"
+        )
 
     gray = PIL.Image.new("L", (layout.width, layout.height), 255)
     draw = PIL.ImageDraw.Draw(gray)

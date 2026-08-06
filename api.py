@@ -4,7 +4,7 @@ HTTP API for the YHK cat printer. Intended for LAN / HA / reverse-proxy callers.
   GET  /health   — process up (no auth, no BT)
   GET  /ready    — RFCOMM probe; 503 if sleepy/unreachable (no auth)
   GET  /status   — same probe as /ready but always HTTP 200 (HA sensors)
-  POST /printer/wake — best-effort BT nudge + RFCOMM probe (no auth)
+  POST /printer/wake — BT nudge + RFCOMM probe (auth if API_TOKEN set)
   POST /print/text      JSON: {"text": "...", "font_size": 65}
   POST /print/markdown  JSON: {"markdown": "..."}
   POST /print/image     multipart form field "file" (image)
@@ -13,11 +13,12 @@ HTTP API for the YHK cat printer. Intended for LAN / HA / reverse-proxy callers.
 Env (in addition to yhk_printer):
   API_HOST, API_PORT, API_TOKEN, DEFAULT_SUBREDDIT
   MAX_TEXT_CHARS, MAX_MARKDOWN_CHARS, MAX_UPLOAD_BYTES, MAX_IMAGE_PIXELS
+  MAX_RENDER_HEIGHT
 
 Auth (only if API_TOKEN is set): send header
   X-Api-Key: <token>
   or Authorization: Bearer <token>
-NFC / HA: same header on every print call. /health, /ready, /status, /printer/wake stay open.
+NFC / HA: same header on /print/* and /printer/wake. /health, /ready, /status stay open.
 """
 from __future__ import annotations
 
@@ -38,13 +39,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from image_prep import prepare_raster_image
-from markdown_renderer import render_markdown
+from markdown_renderer import RenderTooTall, render_markdown
 from reddit_image import RedditImageError, fetch_random_subreddit_image
 from yhk_printer import (
+    create_text_image,
     get_config,
     is_retryable_connect_error,
     print_image,
-    print_text,
     printer_session,
 )
 
@@ -61,6 +62,8 @@ MAX_TEXT_CHARS = int(os.environ.get("MAX_TEXT_CHARS", str(50_000)))
 MAX_MARKDOWN_CHARS = int(os.environ.get("MAX_MARKDOWN_CHARS", str(100_000)))
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(15 * 1024 * 1024)))
 MAX_IMAGE_PIXELS = int(os.environ.get("MAX_IMAGE_PIXELS", str(25_000_000)))
+# ~2.5m of paper at ~8 dots/mm — long recipes OK; newline bombs fail hard.
+MAX_RENDER_HEIGHT = int(os.environ.get("MAX_RENDER_HEIGHT", str(20_000)))
 READY_TIMEOUT_S = float(os.environ.get("READY_TIMEOUT_S", "5"))
 WAKE_BLUETOOTHCTL = os.environ.get("WAKE_BLUETOOTHCTL", "1").strip() not in (
     "0",
@@ -120,6 +123,10 @@ def _extract_token(
     return None
 
 
+def _path_requires_auth(path: str) -> bool:
+    return path.startswith("/print") or path == "/printer/wake"
+
+
 @app.middleware("http")
 async def auth_and_request_log(request: Request, call_next):
     req_id = uuid.uuid4().hex[:8]
@@ -127,7 +134,7 @@ async def auth_and_request_log(request: Request, call_next):
     started = time.perf_counter()
 
     path = request.url.path
-    if path.startswith("/print"):
+    if _path_requires_auth(path):
         expected = _api_token()
         if expected:
             got = _extract_token(
@@ -331,17 +338,24 @@ def _print_with_session(job: str, req_id: str, fn):
 @app.post("/print/text")
 def print_text_endpoint(request: Request, body: TextPrintRequest):
     req_id = getattr(request.state, "req_id", "-")
+    cfg = get_config()
     log.info(
         "event=print_start job=text req_id=%s chars=%s font_size=%s",
         req_id,
         len(body.text),
         body.font_size,
     )
-    _print_with_session(
-        "text",
-        req_id,
-        lambda soc: print_text(soc, body.text, font_size=body.font_size),
-    )
+    try:
+        img = create_text_image(
+            body.text,
+            cfg["width"],
+            font_path=cfg["font_path"],
+            font_size=body.font_size,
+            max_height=MAX_RENDER_HEIGHT,
+        ).convert("1")
+    except ValueError as e:
+        raise HTTPException(status_code=413, detail=str(e)) from e
+    _print_with_session("text", req_id, lambda soc: print_image(soc, img))
     return {"ok": True, "printed": "text"}
 
 
@@ -359,7 +373,12 @@ def print_markdown_endpoint(request: Request, body: MarkdownPrintRequest):
             body.markdown,
             width=cfg["width"],
             font_path=cfg["font_path"],
+            allow_local_images=False,
+            max_height=MAX_RENDER_HEIGHT,
         )
+    except RenderTooTall as e:
+        log.warning("event=render_too_tall job=markdown req_id=%s error=%s", req_id, e)
+        raise HTTPException(status_code=413, detail=str(e)) from e
     except Exception as e:
         log.error("event=render_fail job=markdown req_id=%s error=%s", req_id, e)
         raise HTTPException(status_code=500, detail=f"Markdown render failed: {e}") from e
@@ -419,7 +438,11 @@ def print_reddit_endpoint(
     log.info("event=print_start job=reddit req_id=%s subreddit=%s", req_id, sub)
 
     try:
-        img, post = fetch_random_subreddit_image(sub)
+        img, post = fetch_random_subreddit_image(
+            sub,
+            max_bytes=MAX_UPLOAD_BYTES,
+            max_pixels=MAX_IMAGE_PIXELS,
+        )
     except RedditImageError as e:
         log.error("event=fetch_fail job=reddit req_id=%s error=%s", req_id, e)
         raise HTTPException(status_code=502, detail=str(e)) from e

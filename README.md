@@ -42,7 +42,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080/print/reddit -ContentT
 Invoke-RestMethod -Method Post -Uri http://localhost:8080/print/reddit -ContentType 'application/json' -Headers @{ 'X-Api-Key' = 'your-token' } -Body '{}'
 ```
 
-**Auth:** if `API_TOKEN` is set, `/print/*` requires `X-Api-Key` or `Authorization: Bearer …`. `/health`, `/ready`, `/status`, and `/printer/wake` stay open (HA / NFC liveness). Leave token empty for open LAN during early bring-up.
+**Auth:** if `API_TOKEN` is set, `/print/*` and `/printer/wake` require `X-Api-Key` or `Authorization: Bearer …`. `/health`, `/ready`, and `/status` stay open (HA sensors). Leave token empty for open LAN during early bring-up. HA package: set `cat_printer_api_token` in `secrets.yaml` to the same value.
 
 **Ready / status:** `GET /ready` probes RFCOMM — `printer: awake|busy` (200) or `sleepy` (503). `GET /status` is the same probe always as HTTP 200 (better for HA REST sensors).
 
@@ -54,7 +54,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080/print/reddit -ContentT
 
 **Markdown:** headings, paragraphs, bold/italic/strike, code, nested lists, task boxes, blockquotes, HR, tables, images (http/data/local; autocontrast+sharpen+Floyd–Steinberg dither), links as label + two-column end-of-paragraph QR (deduped), and ` ```qr ` fences. Text/QR stay hard-thresholded.
 
-Env: `PRINTER_MAC`, `PRINTER_PORT`, `PRINTER_WIDTH`, `PRINTER_FONT`, `API_HOST`, `API_PORT`, `API_TOKEN`, `DEFAULT_SUBREDDIT`, `PRINTER_CONNECT_RETRIES`, `PRINTER_CONNECT_RETRY_DELAY`, plus optional ceilings `MAX_TEXT_CHARS`, `MAX_MARKDOWN_CHARS`, `MAX_UPLOAD_BYTES`, `MAX_IMAGE_PIXELS`.
+Env: `PRINTER_MAC`, `PRINTER_PORT`, `PRINTER_WIDTH`, `PRINTER_FONT`, `API_HOST`, `API_PORT`, `API_TOKEN`, `DEFAULT_SUBREDDIT`, `PRINTER_CONNECT_RETRIES`, `PRINTER_CONNECT_RETRY_DELAY`, plus optional ceilings `MAX_TEXT_CHARS`, `MAX_MARKDOWN_CHARS`, `MAX_UPLOAD_BYTES`, `MAX_IMAGE_PIXELS`, `MAX_RENDER_HEIGHT`.
 
 HAOS deploy: `scripts/pack-addon.ps1 -Deploy` (or `pack-addon.sh --deploy`) packs and mirrors to `\\home.lan\addons\cat_printer` (override with `CAT_PRINTER_ADDON_DEPLOY`). Then **Rebuild** the add-on in HA. Set printer MAC / optional token / default subreddit in options, USB BT dongle on the HA VM, pair the printer, start the add-on. DNS/Caddy yourself (`print.wunderfrog.com` → HA `:8080`, LAN-only recommended).
 

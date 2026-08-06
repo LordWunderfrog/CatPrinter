@@ -147,7 +147,7 @@ def _get_wrapped_text(text: str, font: PIL.ImageFont.ImageFont, line_length: int
     return "\n".join(lines)
 
 
-def create_text_image(text, width, font_path="Lucon.ttf", font_size=12):
+def create_text_image(text, width, font_path="Lucon.ttf", font_size=12, max_height=None):
     """Render text to a PIL Image sized for the printer (trimmed to content)."""
     font = PIL.ImageFont.truetype(font_path, font_size)
     # Measure first so long jobs aren't silently clipped by a fixed canvas.
@@ -159,6 +159,10 @@ def create_text_image(text, width, font_path="Lucon.ttf", font_size=12):
     body = "\n".join(lines)
     bbox = probe_draw.multiline_textbbox((0, 0), body, font=font)
     height = max(bbox[3] - bbox[1] + 20, font_size + 20)
+    if max_height is not None and height > max_height:
+        raise ValueError(
+            f"Text render height {height}px exceeds max {max_height}px"
+        )
     img = PIL.Image.new("RGB", (width, height), color=(255, 255, 255))
     d = PIL.ImageDraw.Draw(img)
     d.text((0, 0), body, fill=(0, 0, 0), font=font)

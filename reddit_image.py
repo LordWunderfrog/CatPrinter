@@ -41,13 +41,31 @@ def _browser_headers(*, accept: str, referer: str | None = None) -> dict[str, st
     return headers
 
 
+# Crash ceilings — keep in sync with api.MAX_UPLOAD_BYTES default.
+DEFAULT_MAX_IMAGE_BYTES = 15 * 1024 * 1024
+DEFAULT_MAX_LISTING_BYTES = 2 * 1024 * 1024
+
+
+def _read_capped(resp, max_bytes: int) -> bytes:
+    data = resp.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise RedditImageError(f"Response too large (max {max_bytes} bytes)")
+    return data
+
+
 def _http_get_text(url: str, headers: dict[str, str], timeout: float = 20.0) -> str:
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", errors="replace")
+        return _read_capped(resp, DEFAULT_MAX_LISTING_BYTES).decode(
+            "utf-8", errors="replace"
+        )
 
 
-def _http_get_bytes(url: str, timeout: float = 30.0) -> bytes:
+def _http_get_bytes(
+    url: str,
+    timeout: float = 30.0,
+    max_bytes: int = DEFAULT_MAX_IMAGE_BYTES,
+) -> bytes:
     req = urllib.request.Request(
         url,
         headers=_browser_headers(
@@ -56,7 +74,7 @@ def _http_get_bytes(url: str, timeout: float = 30.0) -> bytes:
         ),
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+        return _read_capped(resp, max_bytes)
 
 
 def _normalize_subreddit(name: str) -> str:
@@ -134,6 +152,8 @@ def fetch_random_subreddit_image(
     subreddit: str = "chonkers",
     limit: int = 100,
     attempts: int = 8,
+    max_bytes: int = DEFAULT_MAX_IMAGE_BYTES,
+    max_pixels: int | None = None,
 ) -> tuple[PIL.Image.Image, dict[str, str]]:
     """
     Pick and download a random image. Retries on dead CDN links.
@@ -144,9 +164,14 @@ def fetch_random_subreddit_image(
     last_err: Exception | None = None
     for post in posts[: max(1, attempts)]:
         try:
-            raw = _http_get_bytes(post["url"])
+            raw = _http_get_bytes(post["url"], max_bytes=max_bytes)
             img = PIL.Image.open(io.BytesIO(raw))
             img.load()
+            w, h = img.size
+            if max_pixels is not None and w * h > max_pixels:
+                raise RedditImageError(
+                    f"Image too large ({w}x{h}; max {max_pixels} pixels)"
+                )
             return img.convert("RGB"), post
         except Exception as e:
             last_err = e

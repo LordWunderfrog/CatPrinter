@@ -3,8 +3,13 @@
 # Install: copy to /config/packages/cat_printer.yaml and enable
 #   homeassistant.packages: !include_dir_named packages
 #
+# Auth: secrets.yaml must define (match add-on api_token; use "" for open LAN):
+#   cat_printer_api_token: ""
+# When the add-on token is set, /print/* and /printer/wake require X-Api-Key.
+# /status stays open for the REST sensor.
+#
 # NFC: Settings → Tags → create/write tag → put its ID in the automation
-# trigger below (replace CHANGE_ME). Reload automations. Scan → chonk.
+# trigger below. Reload automations. Scan → chonk.
 #
 # Base URL: Cat Printer add-on on this host.
 
@@ -50,11 +55,15 @@ rest_command:
   cat_printer_wake:
     url: http://127.0.0.1:8080/printer/wake
     method: POST
+    headers:
+      X-Api-Key: !secret cat_printer_api_token
     timeout: 60
   cat_printer_print_reddit:
     url: http://127.0.0.1:8080/print/reddit
     method: POST
     content_type: application/json
+    headers:
+      X-Api-Key: !secret cat_printer_api_token
     payload: "{}"
     timeout: 120
 
