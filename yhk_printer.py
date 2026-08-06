@@ -1,8 +1,10 @@
 """
 YHK cat/rabbit thermal printer (Classic Bluetooth RFCOMM).
 Reusable library: connect, print_image, print_text.
-Config from env: PRINTER_MAC, PRINTER_PORT, PRINTER_WIDTH, PRINTER_FONT.
+Config from env: PRINTER_MAC, PRINTER_PORT, PRINTER_WIDTH, PRINTER_FONT,
+  PRINTER_CONNECT_RETRIES, PRINTER_CONNECT_RETRY_DELAY.
 """
+import errno
 import os
 import socket
 import struct
@@ -15,6 +17,15 @@ import PIL.ImageFont
 import PIL.ImageChops
 import PIL.ImageOps
 
+# Transient Classic-BT failures (sleepy / radio glitch). Not a keep-awake strategy.
+_RETRYABLE_ERRNOS = {
+    errno.EHOSTDOWN,  # 112 Host is down (common on HAOS after drop)
+    errno.EHOSTUNREACH,
+    errno.ETIMEDOUT,
+    errno.ECONNREFUSED,
+    errno.ECONNRESET,
+}
+
 
 def get_config():
     """Read printer config from environment with defaults."""
@@ -23,18 +34,49 @@ def get_config():
         "port": int(os.environ.get("PRINTER_PORT", "2")),
         "width": int(os.environ.get("PRINTER_WIDTH", "384")),
         "font_path": os.environ.get("PRINTER_FONT", "Lucon.ttf"),
+        "connect_retries": int(os.environ.get("PRINTER_CONNECT_RETRIES", "3")),
+        "connect_retry_delay": float(os.environ.get("PRINTER_CONNECT_RETRY_DELAY", "1.5")),
     }
 
 
-def connect(mac=None, port=None, timeout=10.0):
-    """Open RFCOMM socket to the printer. If mac/port are None, use get_config()."""
+def _is_retryable_connect_error(exc: BaseException) -> bool:
+    if not isinstance(exc, OSError):
+        return False
+    if exc.errno in _RETRYABLE_ERRNOS:
+        return True
+    msg = str(exc).lower()
+    return "host is down" in msg or "timed out" in msg
+
+
+def connect(mac=None, port=None, timeout=10.0, retries=None, retry_delay=None):
+    """
+    Open RFCOMM socket to the printer. Retries transient Host-is-down / timeout.
+    If mac/port are None, use get_config().
+    """
     cfg = get_config()
     mac = mac or cfg["mac"]
     port = port if port is not None else cfg["port"]
-    s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
-    s.settimeout(timeout)
-    s.connect((mac, port))
-    return s
+    attempts = max(1, retries if retries is not None else cfg["connect_retries"])
+    delay = retry_delay if retry_delay is not None else cfg["connect_retry_delay"]
+
+    last_err: BaseException | None = None
+    for attempt in range(1, attempts + 1):
+        s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
+        s.settimeout(timeout)
+        try:
+            s.connect((mac, port))
+            return s
+        except OSError as e:
+            last_err = e
+            try:
+                s.close()
+            except OSError:
+                pass
+            if attempt >= attempts or not _is_retryable_connect_error(e):
+                raise
+            sleep(delay)
+    assert last_err is not None
+    raise last_err
 
 
 @contextmanager

@@ -3,6 +3,8 @@ HTTP API for the YHK cat printer. Intended for LAN / HA / reverse-proxy callers.
 
   GET  /health   — process up (no auth, no BT)
   GET  /ready    — RFCOMM probe; 503 if sleepy/unreachable (no auth)
+  GET  /status   — same probe as /ready but always HTTP 200 (HA sensors)
+  POST /printer/wake — best-effort BT nudge + RFCOMM probe (no auth)
   POST /print/text      JSON: {"text": "...", "font_size": 65}
   POST /print/markdown  JSON: {"markdown": "..."}
   POST /print/image     multipart form field "file" (image)
@@ -15,7 +17,7 @@ Env (in addition to yhk_printer):
 Auth (only if API_TOKEN is set): send header
   X-Api-Key: <token>
   or Authorization: Bearer <token>
-NFC / HA: same header on every print call. /health and /ready stay open.
+NFC / HA: same header on every print call. /health, /ready, /status, /printer/wake stay open.
 """
 from __future__ import annotations
 
@@ -23,6 +25,7 @@ import io
 import logging
 import os
 import secrets
+import subprocess
 import threading
 import time
 import uuid
@@ -53,6 +56,11 @@ MAX_MARKDOWN_CHARS = int(os.environ.get("MAX_MARKDOWN_CHARS", str(100_000)))
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(15 * 1024 * 1024)))
 MAX_IMAGE_PIXELS = int(os.environ.get("MAX_IMAGE_PIXELS", str(25_000_000)))
 READY_TIMEOUT_S = float(os.environ.get("READY_TIMEOUT_S", "5"))
+WAKE_BLUETOOTHCTL = os.environ.get("WAKE_BLUETOOTHCTL", "1").strip() not in (
+    "0",
+    "false",
+    "no",
+)
 
 
 def _api_token() -> str:
@@ -158,47 +166,115 @@ def health():
     }
 
 
+def _bluetoothctl_nudge(mac: str) -> str | None:
+    """Best-effort Classic reconnect. Returns a short note or None if skipped."""
+    if not WAKE_BLUETOOTHCTL:
+        return None
+    try:
+        subprocess.run(
+            ["bluetoothctl", "disconnect", mac],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        time.sleep(1.0)
+        proc = subprocess.run(
+            ["bluetoothctl", "connect", mac],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        out = ((proc.stdout or "") + (proc.stderr or "")).strip()
+        log.info(
+            "event=wake_bluetoothctl mac=%s returncode=%s out=%r",
+            mac,
+            proc.returncode,
+            out[:200],
+        )
+        return out[:200] if out else f"bluetoothctl exit {proc.returncode}"
+    except FileNotFoundError:
+        log.info("event=wake_bluetoothctl skipped reason=not_installed")
+        return "bluetoothctl not installed"
+    except Exception as e:
+        log.warning("event=wake_bluetoothctl_fail mac=%s error=%s", mac, e)
+        return str(e)
+
+
+def _probe_printer(*, timeout: float) -> dict:
+    """
+    RFCOMM probe under the print lock.
+    Returns a payload dict with keys: ok, printer, printer_mac, and optional detail.
+    printer is awake|busy|sleepy|error.
+    """
+    cfg = get_config()
+    if not _print_lock.acquire(blocking=False):
+        log.info("event=probe printer=busy mac=%s", cfg["mac"])
+        return {"ok": True, "printer": "busy", "printer_mac": cfg["mac"]}
+
+    try:
+        try:
+            with printer_session(probe=True, timeout=timeout):
+                pass
+        except OSError as e:
+            log.warning("event=probe printer=sleepy mac=%s error=%s", cfg["mac"], e)
+            return {
+                "ok": False,
+                "printer": "sleepy",
+                "printer_mac": cfg["mac"],
+                "detail": str(e),
+            }
+        except Exception as e:
+            log.warning("event=probe printer=error mac=%s error=%s", cfg["mac"], e)
+            return {
+                "ok": False,
+                "printer": "error",
+                "printer_mac": cfg["mac"],
+                "detail": str(e),
+            }
+        log.info("event=probe printer=awake mac=%s", cfg["mac"])
+        return {"ok": True, "printer": "awake", "printer_mac": cfg["mac"]}
+    finally:
+        _print_lock.release()
+
+
 @app.get("/ready")
 def ready():
     """
     Readiness: can we open RFCOMM to the printer right now?
     200 awake / busy; 503 sleepy or unreachable.
     """
-    cfg = get_config()
-    if not _print_lock.acquire(blocking=False):
-        log.info("event=ready printer=busy mac=%s", cfg["mac"])
-        return {"ok": True, "printer": "busy", "printer_mac": cfg["mac"]}
+    body = _probe_printer(timeout=READY_TIMEOUT_S)
+    if body.get("ok"):
+        return body
+    return JSONResponse(status_code=503, content=body)
 
-    try:
-        try:
-            with printer_session(probe=True, timeout=READY_TIMEOUT_S):
-                pass
-        except OSError as e:
-            log.warning("event=ready printer=sleepy mac=%s error=%s", cfg["mac"], e)
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "ok": False,
-                    "printer": "sleepy",
-                    "printer_mac": cfg["mac"],
-                    "detail": str(e),
-                },
-            )
-        except Exception as e:
-            log.warning("event=ready printer=error mac=%s error=%s", cfg["mac"], e)
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "ok": False,
-                    "printer": "error",
-                    "printer_mac": cfg["mac"],
-                    "detail": str(e),
-                },
-            )
-        log.info("event=ready printer=awake mac=%s", cfg["mac"])
-        return {"ok": True, "printer": "awake", "printer_mac": cfg["mac"]}
-    finally:
-        _print_lock.release()
+
+@app.get("/status")
+def status():
+    """Same probe as /ready, always HTTP 200 — friendlier for HA REST sensors."""
+    return _probe_printer(timeout=READY_TIMEOUT_S)
+
+
+@app.post("/printer/wake")
+def printer_wake():
+    """
+    Bounded nudge: optional bluetoothctl disconnect/connect, then RFCOMM probe.
+    Does not loop — HA owns attempt limits / cooldown.
+    """
+    cfg = get_config()
+    mac = cfg["mac"]
+    log.info("event=wake_start mac=%s", mac)
+    bt_note = _bluetoothctl_nudge(mac)
+    body = _probe_printer(timeout=max(READY_TIMEOUT_S, 8.0))
+    if bt_note:
+        body = {**body, "bluetoothctl": bt_note}
+    if body.get("ok"):
+        log.info("event=wake_ok mac=%s printer=%s", mac, body.get("printer"))
+        return body
+    log.warning("event=wake_fail mac=%s detail=%s", mac, body.get("detail"))
+    return JSONResponse(status_code=503, content=body)
 
 
 def _print_with_session(job: str, req_id: str, fn):

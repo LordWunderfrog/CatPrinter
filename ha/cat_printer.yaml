@@ -1,0 +1,160 @@
+# Cat Printer — bounded ready-check + revive package for Home Assistant.
+#
+# Install:
+#   1. Copy this file to /config/packages/cat_printer.yaml (Samba: config share).
+#   2. In configuration.yaml ensure:
+#        homeassistant:
+#          packages: !include_dir_named packages
+#   3. Developer Tools → YAML → Check → Restart HA (or reload REST + automations if split).
+#   4. Rebuild/restart the Cat Printer add-on so /status and /printer/wake exist.
+#
+# Behaviour:
+#   - Poll /status every 15 minutes.
+#   - On sleepy/error: up to 3 wakes, 2 minutes apart.
+#   - Then give up: persistent notification + needs_button; 6h cooldown.
+#   - When awake again: reset attempts / needs_button / clear notification.
+#
+# Base URL: add-on on same HAOS host. Change if your print API lives elsewhere.
+
+input_boolean:
+  cat_printer_needs_button:
+    name: Cat printer needs button
+    icon: mdi:printer-pos-alert
+  cat_printer_revive_enabled:
+    name: Cat printer auto-revive
+    icon: mdi:robot
+    initial: true
+
+input_number:
+  cat_printer_wake_attempts:
+    name: Cat printer wake attempts
+    icon: mdi:counter
+    min: 0
+    max: 10
+    step: 1
+    mode: box
+    initial: 0
+
+input_datetime:
+  cat_printer_give_up_at:
+    name: Cat printer give-up time
+    has_date: true
+    has_time: true
+
+rest:
+  - resource: http://127.0.0.1:8080/status
+    scan_interval: 900
+    timeout: 45
+    sensor:
+      - name: Cat Printer State
+        unique_id: cat_printer_state
+        value_template: "{{ value_json.printer | default('unknown') }}"
+        json_attributes:
+          - ok
+          - printer_mac
+          - detail
+
+rest_command:
+  cat_printer_wake:
+    url: http://127.0.0.1:8080/printer/wake
+    method: POST
+    timeout: 60
+
+automation:
+  - id: cat_printer_reset_on_awake
+    alias: Cat printer reset when awake
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: sensor.cat_printer_state
+        to:
+          - awake
+          - busy
+    action:
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.cat_printer_wake_attempts
+        data:
+          value: 0
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.cat_printer_needs_button
+      - action: persistent_notification.dismiss
+        data:
+          notification_id: cat_printer_needs_button
+
+  - id: cat_printer_bounded_revive
+    alias: Cat printer bounded revive
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: state
+        entity_id: sensor.cat_printer_state
+        to:
+          - sleepy
+          - error
+      - platform: state
+        entity_id: sensor.cat_printer_state
+        to: unavailable
+        for:
+          minutes: 2
+    condition:
+      - condition: state
+        entity_id: input_boolean.cat_printer_revive_enabled
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.cat_printer_needs_button
+        state: "off"
+      - condition: template
+        value_template: >-
+          {% set give_up = states('input_datetime.cat_printer_give_up_at') %}
+          {% if give_up in ['unknown', 'unavailable', ''] %}
+            true
+          {% else %}
+            {{ (as_timestamp(now()) - as_timestamp(give_up)) > 21600 }}
+          {% endif %}
+    action:
+      - repeat:
+          while:
+            - condition: template
+              value_template: "{{ states('input_number.cat_printer_wake_attempts') | int(0) < 3 }}"
+            - condition: state
+              entity_id: input_boolean.cat_printer_needs_button
+              state: "off"
+            - condition: template
+              value_template: >-
+                {{ states('sensor.cat_printer_state') not in ['awake', 'busy'] }}
+          sequence:
+            - action: rest_command.cat_printer_wake
+            - action: homeassistant.update_entity
+              target:
+                entity_id: sensor.cat_printer_state
+            - delay:
+                seconds: 5
+            - action: input_number.increment
+              target:
+                entity_id: input_number.cat_printer_wake_attempts
+            - condition: template
+              value_template: >-
+                {{ states('sensor.cat_printer_state') not in ['awake', 'busy'] }}
+            - delay:
+                minutes: 2
+      - condition: template
+        value_template: >-
+          {{ states('sensor.cat_printer_state') not in ['awake', 'busy'] }}
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.cat_printer_needs_button
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.cat_printer_give_up_at
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      - action: persistent_notification.create
+        data:
+          notification_id: cat_printer_needs_button
+          title: Cat printer needs you
+          message: >-
+            Auto-revive gave up after a few tries. Wake the printer (power button),
+            then wait for sensor.cat_printer_state to show awake — or toggle
+            input_boolean.cat_printer_needs_button off after you fix it.
