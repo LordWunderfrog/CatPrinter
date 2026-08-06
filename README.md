@@ -46,7 +46,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080/print/reddit -ContentT
 
 **Auth:** if `API_TOKEN` is set, `/print/*` and `/printer/wake` require `X-Api-Key` or `Authorization: Bearer …`. `/health`, `/ready`, and `/status` stay open (HA sensors). Leave token empty for open LAN during early bring-up. HA package: set `cat_printer_api_token` in `secrets.yaml` to the same value.
 
-**Spool:** `/print/*` validates and prepares the image, writes it under `/data/spool` (survives rebuilds), then returns **202**. Drain runs when something already talks to the printer (enqueue if awake, `/status`/`/ready` awake, `/printer/wake` ok) — no forever RFCOMM polling. Spool full → 503. Depth + path on `/health`. Old jobs expire after `SPOOL_TTL_S` (default 7 days).
+**Spool:** `/print/*` validates and prepares the image, writes it under `/data/spool` (survives rebuilds), then returns **202**. Drain runs on enqueue (if awake), `/status`/`/ready` awake, `/printer/wake` ok, startup, and every `SPOOL_RETRY_S` (default 2m) **only while jobs are parked**. No polling when empty. Spool full → 503. Depth + path on `/health`. Old jobs expire after `SPOOL_TTL_S` (default 7 days).
 
 **Ready / status:** `GET /ready` probes RFCOMM — `printer: awake|busy` (200) or `sleepy` (503). `GET /status` is the same probe always as HTTP 200 (better for HA REST sensors).
 

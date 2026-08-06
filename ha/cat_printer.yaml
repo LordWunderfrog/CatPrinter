@@ -40,7 +40,7 @@ input_datetime:
 
 rest:
   - resource: http://127.0.0.1:8080/status
-    scan_interval: 900
+    scan_interval: 120
     timeout: 45
     sensor:
       - name: Cat Printer State
@@ -166,11 +166,12 @@ automation:
             then wait for sensor.cat_printer_state to show awake — or toggle
             input_boolean.cat_printer_needs_button off after you fix it.
 
-  # Dumb caller: tag → print. Wake/retry is the API's job.
+  # Dumb caller: tag → spool. Drain/wake is the API's job.
+  # queued: rapid double-taps must not be silently dropped while Reddit fetch runs.
   - id: cat_printer_nfc_surprise_chonk
     alias: Cat printer NFC surprise chonk
-    mode: single
-    max_exceeded: silent
+    mode: queued
+    max: 10
     trigger:
       - platform: tag
         tag_id: fb7b4343-d943-4aa5-ac78-4b640d98bca5

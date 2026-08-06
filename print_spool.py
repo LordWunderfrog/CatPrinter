@@ -23,6 +23,8 @@ log = logging.getLogger("cat_printer.spool")
 
 MAX_PRINT_QUEUE = int(os.environ.get("MAX_PRINT_QUEUE", "32"))
 SPOOL_TTL_S = float(os.environ.get("SPOOL_TTL_S", str(7 * 24 * 3600)))
+# While jobs are parked (printer sleepy), retry drain on this interval — not when empty.
+SPOOL_RETRY_S = float(os.environ.get("SPOOL_RETRY_S", "120"))
 QUEUE_PRINT_FAIL_LIMIT = int(os.environ.get("QUEUE_PRINT_FAIL_LIMIT", "3"))
 
 
@@ -48,6 +50,8 @@ class PrintSpool:
         self.root = (root or _default_spool_dir()).resolve()
         self.maxsize = max(1, maxsize)
         self._drain_lock = threading.Lock()
+        self._retry_lock = threading.Lock()
+        self._retry_pending = False
         self.root.mkdir(parents=True, exist_ok=True)
 
     def stats(self) -> dict[str, Any]:
@@ -165,6 +169,7 @@ class PrintSpool:
                         e,
                     )
                     stopped = "sleepy"
+                    self._arm_sleepy_retry()
                     break
                 except PrintFailed as e:
                     fails = int(payload.get("fail_count") or 0) + 1
@@ -218,6 +223,33 @@ class PrintSpool:
             "stopped": stopped,
             "queue_depth": self.pending_count(),
         }
+
+    def _arm_sleepy_retry(self) -> None:
+        """One delayed drain while work remains; no polling when the spool is empty."""
+        if SPOOL_RETRY_S <= 0:
+            return
+        with self._retry_lock:
+            if self._retry_pending:
+                return
+            self._retry_pending = True
+
+        def runner() -> None:
+            try:
+                time.sleep(SPOOL_RETRY_S)
+                if self.pending_count() > 0:
+                    log.info(
+                        "event=spool_retry_wake depth=%s after_s=%s",
+                        self.pending_count(),
+                        SPOOL_RETRY_S,
+                    )
+                    self.try_drain(reason="sleepy_retry")
+            finally:
+                with self._retry_lock:
+                    self._retry_pending = False
+
+        threading.Thread(
+            target=runner, name="spool-sleepy-retry", daemon=True
+        ).start()
 
     def _pending_json_paths(self) -> list[Path]:
         paths = [p for p in self.root.glob("*.json") if not p.name.startswith(".")]
