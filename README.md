@@ -8,7 +8,8 @@ Fork notes (Wunderfrog): library + HTTP API for Home Assistant / LAN use.
 |-------|------|
 | `yhk_printer.py` | Library (RFCOMM connect / print) |
 | `cat-printer.py` | CLI smoke test |
-| `api.py` | HTTP API (`GET /health`, `POST /print/text`, `POST /print/image`) |
+| `api.py` | HTTP API (`/health`, `/print/text`, `/print/markdown`, `/print/image`) |
+| `markdown_renderer.py` | Mistune AST → 384px 1-bit image |
 | `Dockerfile` | Container build from repo root |
 | `ha-addon/` | HAOS add-on metadata only |
 | `scripts/pack-addon.*` | Builds `dist/cat_printer/` for `/addons` |
@@ -21,8 +22,11 @@ python api.py   # http://0.0.0.0:8080
 
 ```bash
 curl -X POST http://localhost:8080/print/text -H "Content-Type: application/json" -d "{\"text\":\"hello\",\"font_size\":65}"
+curl -X POST http://localhost:8080/print/markdown -H "Content-Type: application/json" -d "{\"markdown\":\"# List\\n\\n- milk\\n- eggs\"}"
 curl -X POST http://localhost:8080/print/image -F "file=@images/Turtle.jpg"
 ```
+
+**Markdown MVP:** headings, paragraphs, bold/italic/strike, inline & fenced code, nested lists, task boxes, blockquotes, horizontal rules. Links print as label text only (QR pass later). Tables/images/QR fences not in this pass.
 
 Env: `PRINTER_MAC`, `PRINTER_PORT`, `PRINTER_WIDTH`, `PRINTER_FONT`, `API_HOST`, `API_PORT`.
 

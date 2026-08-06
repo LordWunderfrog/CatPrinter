@@ -2,8 +2,9 @@
 HTTP API for the YHK cat printer. Intended for LAN / HA / reverse-proxy callers.
 
   GET  /health
-  POST /print/text   JSON: {"text": "...", "font_size": 65}
-  POST /print/image  multipart form field "file" (image)
+  POST /print/text      JSON: {"text": "...", "font_size": 65}
+  POST /print/markdown  JSON: {"markdown": "..."}
+  POST /print/image     multipart form field "file" (image)
 
 Env (in addition to yhk_printer): API_HOST, API_PORT.
 """
@@ -16,6 +17,7 @@ import uvicorn
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
+from markdown_renderer import render_markdown
 from yhk_printer import get_config, print_image, print_text, printer_session
 
 _print_lock = threading.Lock()
@@ -24,6 +26,10 @@ _print_lock = threading.Lock()
 class TextPrintRequest(BaseModel):
     text: str = Field(..., min_length=1)
     font_size: int = Field(65, ge=8, le=200)
+
+
+class MarkdownPrintRequest(BaseModel):
+    markdown: str = Field(..., min_length=1)
 
 
 @asynccontextmanager
@@ -53,6 +59,29 @@ def print_text_endpoint(body: TextPrintRequest):
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e)) from e
     return {"ok": True, "printed": "text"}
+
+
+@app.post("/print/markdown")
+def print_markdown_endpoint(body: MarkdownPrintRequest):
+    cfg = get_config()
+    try:
+        img = render_markdown(
+            body.markdown,
+            width=cfg["width"],
+            font_path=cfg["font_path"],
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Markdown render failed: {e}") from e
+
+    with _print_lock:
+        try:
+            with printer_session() as soc:
+                print_image(soc, img)
+        except OSError as e:
+            raise HTTPException(status_code=502, detail=f"Printer connection failed: {e}") from e
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+    return {"ok": True, "printed": "markdown"}
 
 
 @app.post("/print/image")

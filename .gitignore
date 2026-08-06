@@ -6,3 +6,6 @@ venv/
 *.egg-info/
 .pytest_cache/
 dist/
+_md_preview.png
+_smoke_md.py
+MDSpec.md

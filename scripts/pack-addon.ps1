@@ -9,6 +9,7 @@ New-Item -ItemType Directory -Force -Path $Out | Out-Null
 Copy-Item (Join-Path $Root "yhk_printer.py") $Out
 Copy-Item (Join-Path $Root "api.py") $Out
 Copy-Item (Join-Path $Root "cat-printer.py") $Out
+Copy-Item (Join-Path $Root "markdown_renderer.py") $Out
 Copy-Item (Join-Path $Root "requirements.txt") $Out
 Copy-Item (Join-Path $Root "Lucon.ttf") $Out
 Copy-Item (Join-Path $Root "ha-addon\config.yaml") $Out
