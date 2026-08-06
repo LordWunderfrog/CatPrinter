@@ -1,5 +1,5 @@
 name: Cat Printer
-version: "1.1.0"
+version: "1.1.1"
 slug: cat_printer
 description: YHK classic Bluetooth thermal printer HTTP API
 url: https://github.com/LordWunderfrog/CatPrinter
@@ -10,7 +10,11 @@ startup: application
 boot: auto
 init: false
 host_network: true
-privileged: true
+# Supervisor no longer accepts privileged: true — must be a capability list
+privileged:
+  - NET_ADMIN
+  - NET_RAW
+  - SYS_ADMIN
 usb: true
 ports:
   8080/tcp: 8080

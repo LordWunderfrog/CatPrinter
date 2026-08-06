@@ -1,0 +1,4 @@
+# Shell scripts must stay LF — CRLF breaks shebangs on Linux (bash\r)
+*.sh text eol=lf
+Dockerfile text eol=lf
+**/Dockerfile text eol=lf
