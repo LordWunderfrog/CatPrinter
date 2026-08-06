@@ -40,7 +40,13 @@ from pydantic import BaseModel, Field
 from image_prep import prepare_raster_image
 from markdown_renderer import render_markdown
 from reddit_image import RedditImageError, fetch_random_subreddit_image
-from yhk_printer import get_config, print_image, print_text, printer_session
+from yhk_printer import (
+    get_config,
+    is_retryable_connect_error,
+    print_image,
+    print_text,
+    printer_session,
+)
 
 _print_lock = threading.Lock()
 
@@ -278,13 +284,44 @@ def printer_wake():
 
 
 def _print_with_session(job: str, req_id: str, fn):
+    """
+    Run a print job under the lock. On transient BT failure, one bluetoothctl
+    nudge + one more session attempt — callers (NFC, curl, HA) stay dumb.
+    """
+    cfg = get_config()
     with _print_lock:
         try:
             with printer_session() as soc:
                 fn(soc)
-        except OSError as e:
-            log.error("event=print_fail job=%s req_id=%s error=%s", job, req_id, e)
-            raise HTTPException(status_code=502, detail=f"Printer connection failed: {e}") from e
+        except OSError as first:
+            if not is_retryable_connect_error(first):
+                log.error("event=print_fail job=%s req_id=%s error=%s", job, req_id, first)
+                raise HTTPException(
+                    status_code=502, detail=f"Printer connection failed: {first}"
+                ) from first
+            log.warning(
+                "event=print_wake_retry job=%s req_id=%s error=%s",
+                job,
+                req_id,
+                first,
+            )
+            _bluetoothctl_nudge(cfg["mac"])
+            try:
+                with printer_session() as soc:
+                    fn(soc)
+            except OSError as second:
+                log.error(
+                    "event=print_fail job=%s req_id=%s error=%s after_wake=1",
+                    job,
+                    req_id,
+                    second,
+                )
+                raise HTTPException(
+                    status_code=502, detail=f"Printer connection failed: {second}"
+                ) from second
+            except Exception as e:
+                log.error("event=print_fail job=%s req_id=%s error=%s", job, req_id, e)
+                raise HTTPException(status_code=500, detail=str(e)) from e
         except Exception as e:
             log.error("event=print_fail job=%s req_id=%s error=%s", job, req_id, e)
             raise HTTPException(status_code=500, detail=str(e)) from e

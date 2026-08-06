@@ -39,7 +39,7 @@ def get_config():
     }
 
 
-def _is_retryable_connect_error(exc: BaseException) -> bool:
+def is_retryable_connect_error(exc: BaseException) -> bool:
     if not isinstance(exc, OSError):
         return False
     if exc.errno in _RETRYABLE_ERRNOS:
@@ -72,7 +72,7 @@ def connect(mac=None, port=None, timeout=10.0, retries=None, retry_delay=None):
                 s.close()
             except OSError:
                 pass
-            if attempt >= attempts or not _is_retryable_connect_error(e):
+            if attempt >= attempts or not is_retryable_connect_error(e):
                 raise
             sleep(delay)
     assert last_err is not None

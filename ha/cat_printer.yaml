@@ -1,20 +1,12 @@
-# Cat Printer — bounded ready-check + revive package for Home Assistant.
+# Cat Printer — HA glue only. Print/wake logic lives in the API, not here.
 #
-# Install:
-#   1. Copy this file to /config/packages/cat_printer.yaml (Samba: config share).
-#   2. In configuration.yaml ensure:
-#        homeassistant:
-#          packages: !include_dir_named packages
-#   3. Developer Tools → YAML → Check → Restart HA (or reload REST + automations if split).
-#   4. Rebuild/restart the Cat Printer add-on so /status and /printer/wake exist.
+# Install: copy to /config/packages/cat_printer.yaml and enable
+#   homeassistant.packages: !include_dir_named packages
 #
-# Behaviour:
-#   - Poll /status every 15 minutes.
-#   - On sleepy/error: up to 3 wakes, 2 minutes apart.
-#   - Then give up: persistent notification + needs_button; 6h cooldown.
-#   - When awake again: reset attempts / needs_button / clear notification.
+# NFC: Settings → Tags → create/write tag → put its ID in the automation
+# trigger below (replace CHANGE_ME). Reload automations. Scan → chonk.
 #
-# Base URL: add-on on same HAOS host. Change if your print API lives elsewhere.
+# Base URL: Cat Printer add-on on this host.
 
 input_boolean:
   cat_printer_needs_button:
@@ -59,6 +51,12 @@ rest_command:
     url: http://127.0.0.1:8080/printer/wake
     method: POST
     timeout: 60
+  cat_printer_print_reddit:
+    url: http://127.0.0.1:8080/print/reddit
+    method: POST
+    content_type: application/json
+    payload: "{}"
+    timeout: 120
 
 automation:
   - id: cat_printer_reset_on_awake
@@ -158,3 +156,14 @@ automation:
             Auto-revive gave up after a few tries. Wake the printer (power button),
             then wait for sensor.cat_printer_state to show awake — or toggle
             input_boolean.cat_printer_needs_button off after you fix it.
+
+  # Dumb caller: tag → print. Wake/retry is the API's job.
+  - id: cat_printer_nfc_surprise_chonk
+    alias: Cat printer NFC surprise chonk
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: tag
+        tag_id: CHANGE_ME
+    action:
+      - action: rest_command.cat_printer_print_reddit
