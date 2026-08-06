@@ -1,10 +1,14 @@
 """API helpers / validation (no Bluetooth, no TestClient)."""
+from pathlib import Path
+
+import PIL.Image
 import pytest
 from pydantic import ValidationError
 
 from api import (
     MAX_TEXT_CHARS,
     TextPrintRequest,
+    _compose_captioned_image,
     _default_subreddit,
     _extract_token,
     _path_requires_auth,
@@ -27,10 +31,7 @@ def test_path_requires_auth():
     assert not _path_requires_auth("/health")
 
 
-def test_compose_captioned_image_stacks_title(tmp_path):
-    from api import _compose_captioned_image
-    from pathlib import Path
-
+def test_compose_captioned_image_stacks_title():
     font = str(Path(__file__).resolve().parents[1] / "Lucon.ttf")
     photo = PIL.Image.new("RGB", (200, 80), (128, 128, 128))
     bare = _compose_captioned_image("", photo, width=200, font_path=font)
