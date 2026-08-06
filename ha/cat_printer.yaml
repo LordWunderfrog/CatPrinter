@@ -164,6 +164,6 @@ automation:
     max_exceeded: silent
     trigger:
       - platform: tag
-        tag_id: CHANGE_ME
+        tag_id: print_chonk
     action:
       - action: rest_command.cat_printer_print_reddit

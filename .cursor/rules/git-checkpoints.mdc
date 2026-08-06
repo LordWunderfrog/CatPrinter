@@ -1,0 +1,14 @@
+---
+description: Commit and push at significant project checkpoints
+alwaysApply: true
+---
+
+# Git checkpoints
+
+At significant checkpoints — feature complete, deploy shipped, bug fixed and verified, or a clear stopping point — **commit and push to `origin`** without waiting to be asked.
+
+- Follow the repo's existing commit-message style; prefer why over what.
+- Do not commit `dist/`, secrets, or junk.
+- Do not force-push `main`/`master`.
+- If push fails (auth/network), report it; still leave the local commit.
+- Skip trivial WIP thrash; batch related edits into one checkpoint when possible.

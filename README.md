@@ -15,7 +15,7 @@ Fork notes (Wunderfrog): library + HTTP API for Home Assistant / LAN use.
 | `markdown_renderer.py` | Mistune AST → 384px 1-bit image |
 | `Dockerfile` | Container build from repo root |
 | `ha-addon/` | HAOS add-on metadata only |
-| `scripts/pack-addon.*` | Builds `dist/cat_printer/` for `/addons` |
+| `scripts/pack-addon.*` | Builds `dist/cat_printer/`; `-Deploy` / `--deploy` syncs to HA `/addons` |
 
 ```bash
 pip install -r requirements.txt
@@ -56,7 +56,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080/print/reddit -ContentT
 
 Env: `PRINTER_MAC`, `PRINTER_PORT`, `PRINTER_WIDTH`, `PRINTER_FONT`, `API_HOST`, `API_PORT`, `API_TOKEN`, `DEFAULT_SUBREDDIT`, `PRINTER_CONNECT_RETRIES`, `PRINTER_CONNECT_RETRY_DELAY`, plus optional ceilings `MAX_TEXT_CHARS`, `MAX_MARKDOWN_CHARS`, `MAX_UPLOAD_BYTES`, `MAX_IMAGE_PIXELS`.
 
-HAOS deploy: run `scripts/pack-addon.ps1` (or `.sh`), copy `dist/cat_printer` to the HA `/addons` share, set printer MAC / optional token / default subreddit in add-on options, USB BT dongle on the HA VM, pair the printer, start the add-on. DNS/Caddy yourself (`print.wunderfrog.com` → HA `:8080`, LAN-only recommended).
+HAOS deploy: `scripts/pack-addon.ps1 -Deploy` (or `pack-addon.sh --deploy`) packs and mirrors to `\\home.lan\addons\cat_printer` (override with `CAT_PRINTER_ADDON_DEPLOY`). Then **Rebuild** the add-on in HA. Set printer MAC / optional token / default subreddit in options, USB BT dongle on the HA VM, pair the printer, start the add-on. DNS/Caddy yourself (`print.wunderfrog.com` → HA `:8080`, LAN-only recommended).
 
 ---
 
