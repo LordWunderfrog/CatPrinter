@@ -26,7 +26,7 @@ curl -X POST http://localhost:8080/print/markdown -H "Content-Type: application/
 curl -X POST http://localhost:8080/print/image -F "file=@images/Turtle.jpg"
 ```
 
-**Markdown MVP:** headings, paragraphs, bold/italic/strike, inline & fenced code, nested lists, task boxes, blockquotes, horizontal rules. Links print as label text only (QR pass later). Tables/images/QR fences not in this pass.
+**Markdown:** headings, paragraphs, bold/italic/strike, code, nested lists, task boxes, blockquotes, HR, tables, images (http/data/local; autocontrast+sharpen+Floyd–Steinberg dither), links as label + two-column end-of-paragraph QR (deduped), and ` ```qr ` fences. Text/QR stay hard-thresholded.
 
 Env: `PRINTER_MAC`, `PRINTER_PORT`, `PRINTER_WIDTH`, `PRINTER_FONT`, `API_HOST`, `API_PORT`.
 

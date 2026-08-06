@@ -2,18 +2,29 @@
 Markdown → printable Pillow image (Mistune AST + measured layout).
 
 Knows nothing about Bluetooth, FastAPI, or callers.
-MVP: headings, paragraphs/breaks, emphasis, code, lists/tasks, blockquotes, HR.
-Links render as their label text only (QR pass comes later).
+
+Supports: headings, paragraphs/breaks, emphasis, code, lists/tasks, blockquotes,
+HR, links (label + end-of-paragraph QR), QR fences, tables, images (fetch when possible).
 """
 from __future__ import annotations
 
+import base64
+import io
+import re
+import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Iterable
+from urllib.parse import urlparse
 
 import mistune
 import PIL.Image
 import PIL.ImageDraw
+import PIL.ImageEnhance
+import PIL.ImageFilter
 import PIL.ImageFont
+import PIL.ImageOps
+import qrcode
 
 # ---------------------------------------------------------------------------
 # Styles — swap sizes/paths later without touching layout logic
@@ -31,10 +42,13 @@ DEFAULT_SIZES: dict[str, int] = {
     "quote": 18,
 }
 
+IMAGE_TIMEOUT_S = 5.0
+IMAGE_MAX_BYTES = 2_000_000
+
 
 @dataclass
 class StyleSheet:
-    """Font roles for Markdown elements. All roles may share one TTF for MVP."""
+    """Font roles for Markdown elements. All roles may share one TTF for now."""
 
     font_path: str
     sizes: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_SIZES))
@@ -45,6 +59,10 @@ class StyleSheet:
     quote_bar_width: int = 3
     quote_pad: int = 8
     threshold: int = 180
+    table_cell_pad: int = 4
+    table_min_col: int = 24
+    qr_gutter: int = 8
+    qr_columns: int = 2
 
     def size(self, role: str) -> int:
         return self.sizes.get(role, self.sizes["body"])
@@ -64,6 +82,14 @@ class Run:
     style: RunStyle
 
 
+@dataclass
+class InlineExtras:
+    """Side effects collected while walking inline nodes."""
+
+    links: list[str] = field(default_factory=list)
+    images: list[tuple[str, str]] = field(default_factory=list)  # (url, alt)
+
+
 # ---------------------------------------------------------------------------
 # Font cache
 # ---------------------------------------------------------------------------
@@ -80,10 +106,6 @@ class FontCache:
         return self._cache[size]
 
 
-# ---------------------------------------------------------------------------
-# Draw operations (pass 1 records; pass 2 executes)
-# ---------------------------------------------------------------------------
-
 DrawFn = Callable[[PIL.ImageDraw.ImageDraw, PIL.Image.Image], None]
 
 
@@ -95,15 +117,106 @@ class LayoutResult:
 
 
 # ---------------------------------------------------------------------------
-# Parser
+# Parser / QR / images
 # ---------------------------------------------------------------------------
 
 
 def _parser() -> mistune.Markdown:
     return mistune.create_markdown(
         renderer="ast",
-        plugins=["strikethrough", "task_lists"],
+        plugins=["strikethrough", "task_lists", "table", "url"],
     )
+
+
+def make_qr_image(payload: str, max_side: int) -> PIL.Image.Image | None:
+    """
+    Build a crisp B/W QR with integer module scaling and quiet zone.
+    Returns None if payload cannot be encoded.
+    """
+    payload = payload.strip()
+    if not payload or max_side < 16:
+        return None
+    try:
+        qr = qrcode.QRCode(
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=1,
+            border=2,
+        )
+        qr.add_data(payload)
+        qr.make(fit=True)
+        modules = qr.modules_count + qr.border * 2
+        box = max(1, max_side // modules)
+        qr.box_size = box
+        img = qr.make_image(fill_color="black", back_color="white").convert("L")
+        # Force pure binary
+        return img.point(lambda p: 0 if p < 128 else 255, mode="L")
+    except Exception:
+        return None
+
+
+def load_image(src: str) -> PIL.Image.Image | None:
+    """Load image from http(s), data URI, or local path. None on failure."""
+    if not src:
+        return None
+    try:
+        if src.startswith("data:"):
+            return _load_data_uri(src)
+        parsed = urlparse(src)
+        if parsed.scheme in ("http", "https"):
+            return _load_http(src)
+        path = Path(src)
+        if path.is_file():
+            img = PIL.Image.open(path)
+            img.load()
+            return img.convert("RGB")
+    except Exception:
+        return None
+    return None
+
+
+def _load_data_uri(src: str) -> PIL.Image.Image | None:
+    match = re.match(r"data:image/[^;]+;base64,(.+)$", src, re.DOTALL)
+    if not match:
+        return None
+    raw = base64.b64decode(match.group(1), validate=False)
+    if len(raw) > IMAGE_MAX_BYTES:
+        return None
+    img = PIL.Image.open(io.BytesIO(raw))
+    img.load()
+    return img.convert("RGB")
+
+
+def _load_http(url: str) -> PIL.Image.Image | None:
+    req = urllib.request.Request(url, headers={"User-Agent": "CatPrinter/1.0"})
+    with urllib.request.urlopen(req, timeout=IMAGE_TIMEOUT_S) as resp:
+        data = resp.read(IMAGE_MAX_BYTES + 1)
+    if len(data) > IMAGE_MAX_BYTES:
+        return None
+    img = PIL.Image.open(io.BytesIO(data))
+    img.load()
+    return img.convert("RGB")
+
+
+def _fit_image(im: PIL.Image.Image, max_width: int) -> PIL.Image.Image:
+    if im.width <= max_width:
+        return im
+    height = max(1, int(im.height * (max_width / im.width)))
+    return im.resize((max_width, height), PIL.Image.Resampling.LANCZOS)
+
+
+def prepare_raster_image(im: PIL.Image.Image, max_width: int) -> PIL.Image.Image:
+    """
+    Photo/meme path: fit, autocontrast, sharpen, light contrast, Floyd–Steinberg.
+    Returns an L image with only 0/255 values (safe to paste onto the page canvas).
+    Text/QR stay hard-thresholded elsewhere — do not use this for those.
+    """
+    fitted = _fit_image(im.convert("RGB"), max_width)
+    gray = PIL.ImageOps.grayscale(fitted)
+    gray = PIL.ImageOps.autocontrast(gray, cutoff=2)
+    gray = gray.filter(PIL.ImageFilter.SHARPEN)
+    gray = PIL.ImageEnhance.Contrast(gray).enhance(1.15)
+    bw = gray.convert("1", dither=PIL.Image.Dither.FLOYDSTEINBERG)
+    return bw.convert("L")
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +235,11 @@ def _merge_style(base: RunStyle, **kwargs: Any) -> RunStyle:
     return RunStyle(**data)
 
 
-def _inline_runs(nodes: Iterable[dict] | None, base: RunStyle) -> list[Run]:
+def _inline_runs(
+    nodes: Iterable[dict] | None,
+    base: RunStyle,
+    extras: InlineExtras | None = None,
+) -> list[Run]:
     if not nodes:
         return []
     runs: list[Run] = []
@@ -135,34 +252,43 @@ def _inline_runs(nodes: Iterable[dict] | None, base: RunStyle) -> list[Run]:
         elif ntype == "linebreak":
             runs.append(Run("\n", base))
         elif ntype == "strong":
-            runs.extend(_inline_runs(node.get("children"), _merge_style(base, bold=True)))
-        elif ntype == "emphasis":
-            runs.extend(_inline_runs(node.get("children"), _merge_style(base, italic=True)))
-        elif ntype == "strikethrough":
-            runs.extend(_inline_runs(node.get("children"), _merge_style(base, strike=True)))
-        elif ntype == "codespan":
-            runs.append(
-                Run(node.get("raw", ""), _merge_style(base, role="code"))
+            runs.extend(
+                _inline_runs(node.get("children"), _merge_style(base, bold=True), extras)
             )
+        elif ntype == "emphasis":
+            runs.extend(
+                _inline_runs(node.get("children"), _merge_style(base, italic=True), extras)
+            )
+        elif ntype == "strikethrough":
+            runs.extend(
+                _inline_runs(node.get("children"), _merge_style(base, strike=True), extras)
+            )
+        elif ntype == "codespan":
+            runs.append(Run(node.get("raw", ""), _merge_style(base, role="code")))
         elif ntype == "link":
-            # MVP: label only; href ignored until QR pass
-            runs.extend(_inline_runs(node.get("children"), base))
+            url = (node.get("attrs") or {}).get("url") or ""
+            runs.extend(_inline_runs(node.get("children"), base, extras))
+            if extras is not None and url:
+                extras.links.append(url)
         elif ntype == "image":
-            alt = node.get("attrs", {}).get("alt") or ""
+            attrs = node.get("attrs") or {}
+            url = attrs.get("url") or ""
+            alt = attrs.get("alt") or ""
             if not alt:
                 alt = " ".join(
                     c.get("raw", "")
                     for c in (node.get("children") or [])
                     if c.get("type") == "text"
                 )
-            if alt:
+            if extras is not None and url:
+                extras.images.append((url, alt))
+            elif alt:
                 runs.append(Run(alt, base))
         elif ntype in ("raw", "inline_html"):
             runs.append(Run(node.get("raw", ""), _merge_style(base, role="code")))
         else:
-            # Unknown inline: degrade to children or raw
             if node.get("children"):
-                runs.extend(_inline_runs(node["children"], base))
+                runs.extend(_inline_runs(node["children"], base, extras))
             elif "raw" in node:
                 runs.append(Run(str(node["raw"]), base))
     return runs
@@ -181,7 +307,6 @@ def _run_width(cache: FontCache, styles: StyleSheet, run: Run) -> float:
     if not run.text or run.text == "\n":
         return 0.0
     font = _font_for(cache, styles, run.style)
-    # bold simulation draws an extra pixel
     extra = 1 if run.style.bold else 0
     return font.getlength(run.text) + extra
 
@@ -195,7 +320,6 @@ def _run_height(cache: FontCache, styles: StyleSheet, run: Run) -> int:
 def _split_run_at_width(
     cache: FontCache, styles: StyleSheet, run: Run, max_width: float
 ) -> tuple[Run, Run | None]:
-    """Split run so the first piece fits max_width (character boundaries)."""
     if max_width <= 0:
         return Run("", run.style), run
     text = run.text
@@ -213,7 +337,6 @@ def _split_run_at_width(
         else:
             hi = mid - 1
     if fit == 0:
-        # Force at least one character to avoid infinite loops
         fit = 1
     return Run(text[:fit], run.style), Run(text[fit:], run.style)
 
@@ -224,7 +347,6 @@ def _wrap_runs(
     runs: list[Run],
     max_width: float,
 ) -> list[list[Run]]:
-    """Wrap styled runs into lines that fit max_width."""
     lines: list[list[Run]] = []
     current: list[Run] = []
     used = 0.0
@@ -262,7 +384,6 @@ def _wrap_runs(
                 break
 
             text = remaining.text
-            # Word-aware wrap when possible
             if " " in text:
                 words = text.split(" ")
                 acc = ""
@@ -284,7 +405,6 @@ def _wrap_runs(
                     commit()
                     continue
 
-            # Character split (overlong token / no spaces)
             first, rest = _split_run_at_width(
                 cache, styles, remaining, avail if avail >= 1 else max_width
             )
@@ -297,10 +417,6 @@ def _wrap_runs(
 
     commit()
     return lines or [[]]
-
-# ---------------------------------------------------------------------------
-# Drawing helpers
-# ---------------------------------------------------------------------------
 
 
 def _line_height(cache: FontCache, styles: StyleSheet, line: list[Run]) -> int:
@@ -319,7 +435,6 @@ def _draw_run(
     styles: StyleSheet,
     fill: int = 0,
 ) -> float:
-    """Draw one run; return x advance. Bold/italic faked when TTF has no faces."""
     if not run.text:
         return x
     font = _font_for(cache, styles, run.style)
@@ -377,6 +492,20 @@ def _draw_line_runs(
         cx = _draw_run(draw, img, cx, y, run, cache, styles)
 
 
+def _paste_gray(
+    dest: PIL.Image.Image, src: PIL.Image.Image, xy: tuple[int, int]
+) -> None:
+    """Paste grayscale (darker wins) without alpha."""
+    src = src.convert("L")
+    ox, oy = xy
+    dp, sp = dest.load(), src.load()
+    for yy in range(src.height):
+        for xx in range(src.width):
+            ix, iy = ox + xx, oy + yy
+            if 0 <= ix < dest.width and 0 <= iy < dest.height:
+                dp[ix, iy] = min(dp[ix, iy], sp[xx, yy])
+
+
 # ---------------------------------------------------------------------------
 # Block layout
 # ---------------------------------------------------------------------------
@@ -391,7 +520,9 @@ class _Layout:
         self.content_width = max(1, width - 2 * styles.margin)
         self.y = float(styles.margin)
         self.ops: list[DrawFn] = []
-        self._list_counters: list[int] = []
+        self._seen_urls: set[str] = set()
+        self._pending_table_links: list[str] = []
+        self._pending_table_images: list[tuple[str, str]] = []
 
     def _content_left(self, indent: int = 0, quote_depth: int = 0) -> int:
         return (
@@ -434,22 +565,25 @@ class _Layout:
             self._hr(indent, quote_depth)
         elif ntype == "block_code":
             self._block_code(node, indent, quote_depth)
+        elif ntype == "table":
+            self._table(node, indent, quote_depth)
         elif ntype in ("list_item", "task_list_item"):
-            # Handled by _list; if orphaned, degrade
             self.layout_nodes(node.get("children"), indent, quote_depth)
         else:
             if node.get("children"):
                 self.layout_nodes(node["children"], indent, quote_depth)
             elif "raw" in node and node["raw"]:
-                runs = [Run(str(node["raw"]), RunStyle(role="code"))]
-                self._emit_runs(runs, indent, quote_depth)
+                self._emit_runs([Run(str(node["raw"]), RunStyle(role="code"))], indent, quote_depth)
 
     def _heading(self, node: dict, indent: int, quote_depth: int) -> None:
         level = int(node.get("attrs", {}).get("level", 1))
         level = min(max(level, 1), 6)
         role = f"h{level}"
-        runs = _inline_runs(node.get("children"), RunStyle(role=role, bold=True))
+        extras = InlineExtras()
+        runs = _inline_runs(node.get("children"), RunStyle(role=role, bold=True), extras)
         self._emit_runs(runs, indent, quote_depth)
+        self._emit_images(extras.images, indent, quote_depth)
+        self._emit_link_qrs(extras.links, indent, quote_depth)
         self.add_gap()
 
     def _paragraph(
@@ -460,8 +594,13 @@ class _Layout:
         role: str = "body",
         gap_after: bool = True,
     ) -> None:
-        runs = _inline_runs(node.get("children"), RunStyle(role=role))
-        self._emit_runs(runs, indent, quote_depth)
+        extras = InlineExtras()
+        runs = _inline_runs(node.get("children"), RunStyle(role=role), extras)
+        meaningful = [r for r in runs if r.text and r.text.strip()]
+        if meaningful:
+            self._emit_runs(runs, indent, quote_depth)
+        self._emit_images(extras.images, indent, quote_depth)
+        self._emit_link_qrs(extras.links, indent, quote_depth)
         if gap_after:
             self.add_gap()
 
@@ -484,6 +623,143 @@ class _Layout:
             self.ops.append(make_op())
             self.y += lh
 
+    def _emit_link_qrs(self, urls: list[str], indent: int, quote_depth: int) -> None:
+        items: list[tuple[str, str]] = []
+        for url in urls:
+            if url in self._seen_urls:
+                continue
+            self._seen_urls.add(url)
+            items.append((url, url))
+        self._emit_qr_grid(items, indent, quote_depth)
+
+    def _emit_qr_grid(
+        self,
+        items: list[tuple[str, str]],
+        indent: int,
+        quote_depth: int,
+    ) -> None:
+        """
+        Pack QR + caption cells into a multi-column row layout (~50% width each
+        when qr_columns=2), captions wrap under their own QR.
+        """
+        cleaned: list[tuple[str, str]] = []
+        for payload, caption in items:
+            payload = (payload or "").strip()
+            if payload:
+                cleaned.append((payload, (caption or payload).strip()))
+        if not cleaned:
+            return
+
+        cols = max(1, self.styles.qr_columns)
+        gutter = self.styles.qr_gutter
+        content_w = int(self._max_width(indent, quote_depth))
+        left0 = self._content_left(indent, quote_depth)
+        col_w = max(16, (content_w - gutter * (cols - 1)) // cols)
+
+        for i in range(0, len(cleaned), cols):
+            row = cleaned[i : i + cols]
+            self._emit_qr_row(row, left0, col_w, gutter, indent, quote_depth)
+
+    def _emit_qr_row(
+        self,
+        row: list[tuple[str, str]],
+        left0: int,
+        col_w: int,
+        gutter: int,
+        indent: int,
+        quote_depth: int,
+    ) -> None:
+        cells: list[dict[str, Any]] = []
+        for payload, caption in row:
+            qr = make_qr_image(payload, col_w)
+            if qr is None:
+                cap_runs = [Run(f"[QR failed] {payload}", RunStyle(role="code"))]
+                cap_lines = _wrap_runs(self.cache, self.styles, cap_runs, float(col_w))
+                cells.append({"qr": None, "lines": cap_lines, "qr_h": 0})
+                continue
+            cap_runs = [Run(caption, RunStyle(role="code"))] if caption else []
+            cap_lines = (
+                _wrap_runs(self.cache, self.styles, cap_runs, float(col_w))
+                if cap_runs
+                else []
+            )
+            cells.append({"qr": qr, "lines": cap_lines, "qr_h": qr.height})
+
+        row_h = 0
+        for cell in cells:
+            h = cell["qr_h"]
+            if cell["qr"] is not None and cell["lines"]:
+                h += self.styles.line_gap
+            h += sum(
+                _line_height(self.cache, self.styles, ln) for ln in cell["lines"]
+            )
+            row_h = max(row_h, h)
+
+        y0 = self.y
+        for ci, cell in enumerate(cells):
+            cell_left = left0 + ci * (col_w + gutter)
+            y = y0
+            qr = cell["qr"]
+            if qr is not None:
+                qx = cell_left + max(0, (col_w - qr.width) // 2)
+
+                def make_qr_op(qr=qr, qx=qx, y=y):
+                    def op(draw, img):
+                        _paste_gray(img, qr, (qx, int(y)))
+
+                    return op
+
+                self.ops.append(make_qr_op())
+                y += qr.height + (self.styles.line_gap if cell["lines"] else 0)
+
+            for line in cell["lines"]:
+                lh = _line_height(self.cache, self.styles, line)
+
+                def make_text_op(line=line, x=cell_left, y=y):
+                    def op(draw, img):
+                        _draw_line_runs(
+                            draw, img, x, y, line, self.cache, self.styles
+                        )
+
+                    return op
+
+                self.ops.append(make_text_op())
+                y += lh
+
+        self.y = y0 + row_h + self.styles.line_gap
+
+    def _emit_images(
+        self, images: list[tuple[str, str]], indent: int, quote_depth: int
+    ) -> None:
+        for url, alt in images:
+            self._emit_image(url, alt, indent, quote_depth)
+
+    def _emit_image(self, url: str, alt: str, indent: int, quote_depth: int) -> None:
+        max_w = int(self._max_width(indent, quote_depth))
+        left = self._content_left(indent, quote_depth)
+        loaded = load_image(url)
+        if loaded is None:
+            if alt:
+                self._emit_runs(
+                    [Run(f"[image: {alt}]", RunStyle(role="code"))],
+                    indent,
+                    quote_depth,
+                )
+            return
+
+        gray = prepare_raster_image(loaded, max_w)
+        x = left + max(0, (max_w - gray.width) // 2)
+        y = self.y
+
+        def op(draw, img, gray=gray, x=x, y=y):
+            _paste_gray(img, gray, (x, int(y)))
+
+        self.ops.append(op)
+        self.y += gray.height + self.styles.line_gap
+        if alt:
+            self._emit_runs([Run(alt, RunStyle(role="code"))], indent, quote_depth)
+        self.add_gap(self.styles.line_gap)
+
     def _hr(self, indent: int, quote_depth: int) -> None:
         left = self._content_left(indent, quote_depth)
         right = self.width - self.margin
@@ -497,9 +773,19 @@ class _Layout:
         self.add_gap()
 
     def _block_code(self, node: dict, indent: int, quote_depth: int) -> None:
+        info = ((node.get("attrs") or {}).get("info") or "").strip()
+        first = info.split()[0].lower() if info else ""
         raw = node.get("raw", "")
         if raw.endswith("\n"):
             raw = raw[:-1]
+
+        if first in ("qr", "qrcode"):
+            payload = raw.strip()
+            self._seen_urls.add(payload)
+            self._emit_qr_grid([(payload, payload)], indent, quote_depth)
+            self.add_gap()
+            return
+
         lines = raw.split("\n") if raw else [""]
         left = self._content_left(indent, quote_depth)
         max_w = self._max_width(indent, quote_depth)
@@ -529,7 +815,9 @@ class _Layout:
         width = self.styles.quote_bar_width
 
         def op(draw, img, bar_x=bar_x, start_y=start_y, end_y=end_y, width=width):
-            draw.rectangle((bar_x, start_y, bar_x + width, max(end_y, start_y + 1)), fill=0)
+            draw.rectangle(
+                (bar_x, start_y, bar_x + width, max(end_y, start_y + 1)), fill=0
+            )
 
         self.ops.append(op)
         self.add_gap()
@@ -553,7 +841,6 @@ class _Layout:
         left = self._content_left(indent, quote_depth)
         marker_run = Run(marker, RunStyle(role="body", bold=True))
         marker_w = _run_width(self.cache, self.styles, marker_run)
-        # First block_text on same line as marker; nested blocks indented
         children = list(node.get("children") or [])
         y0 = self.y
 
@@ -568,14 +855,13 @@ class _Layout:
 
         first, *rest = children
         if first.get("type") in ("block_text", "paragraph"):
-            role = "body"
-            runs = _inline_runs(first.get("children"), RunStyle(role=role))
-            # width reduced by marker
+            extras = InlineExtras()
+            runs = _inline_runs(first.get("children"), RunStyle(role="body"), extras)
             max_w = self._max_width(indent, quote_depth) - marker_w
             lines = _wrap_runs(self.cache, self.styles, runs, max(1.0, max_w))
-            for i, line in enumerate(lines):
+            for line in lines:
                 lh = _line_height(self.cache, self.styles, line)
-                x = left + marker_w if i == 0 else left + marker_w
+                x = left + marker_w
                 y = self.y
 
                 def make_op(line=line, x=x, y=y):
@@ -586,6 +872,8 @@ class _Layout:
 
                 self.ops.append(make_op())
                 self.y += lh
+            self._emit_images(extras.images, indent + 1, quote_depth)
+            self._emit_link_qrs(extras.links, indent + 1, quote_depth)
             for sub in rest:
                 self.layout_node(sub, indent + 1, quote_depth)
         else:
@@ -602,7 +890,6 @@ class _Layout:
         def draw_box(draw, img, x=left, y=y0, checked=checked, box=box):
             draw.rectangle((x, y + 2, x + box, y + 2 + box), outline=0, width=2)
             if checked:
-                # simple check mark
                 draw.line((x + 3, y + 2 + box // 2, x + box // 2, y + box), fill=0, width=2)
                 draw.line((x + box // 2, y + box, x + box - 2, y + 4), fill=0, width=2)
 
@@ -611,7 +898,8 @@ class _Layout:
         children = list(node.get("children") or [])
         if children and children[0].get("type") in ("block_text", "paragraph"):
             first, *rest = children
-            runs = _inline_runs(first.get("children"), RunStyle(role="body"))
+            extras = InlineExtras()
+            runs = _inline_runs(first.get("children"), RunStyle(role="body"), extras)
             max_w = self._max_width(indent, quote_depth) - marker_w
             lines = _wrap_runs(self.cache, self.styles, runs, max(1.0, max_w))
             for line in lines:
@@ -627,12 +915,140 @@ class _Layout:
 
                 self.ops.append(make_op())
                 self.y += lh
+            self._emit_images(extras.images, indent + 1, quote_depth)
+            self._emit_link_qrs(extras.links, indent + 1, quote_depth)
             for sub in rest:
                 self.layout_node(sub, indent + 1, quote_depth)
         else:
             self.y += box + self.styles.line_gap + 4
             for sub in children:
                 self.layout_node(sub, indent + 1, quote_depth)
+
+    # ----- tables -----
+
+    def _table(self, node: dict, indent: int, quote_depth: int) -> None:
+        rows: list[list[list[Run]]] = []
+
+        for child in node.get("children") or []:
+            if child.get("type") == "table_head":
+                row_cells = []
+                for cell in child.get("children") or []:
+                    if cell.get("type") != "table_cell":
+                        continue
+                    extras = InlineExtras()
+                    runs = _inline_runs(
+                        cell.get("children"), RunStyle(role="body", bold=True), extras
+                    )
+                    row_cells.append(runs)
+                    self._pending_table_links.extend(extras.links)
+                    self._pending_table_images.extend(extras.images)
+                rows.append(row_cells)
+            elif child.get("type") == "table_body":
+                for row in child.get("children") or []:
+                    if row.get("type") != "table_row":
+                        continue
+                    row_cells = []
+                    for cell in row.get("children") or []:
+                        if cell.get("type") != "table_cell":
+                            continue
+                        extras = InlineExtras()
+                        runs = _inline_runs(
+                            cell.get("children"), RunStyle(role="body"), extras
+                        )
+                        row_cells.append(runs)
+                        self._pending_table_links.extend(extras.links)
+                        self._pending_table_images.extend(extras.images)
+                    rows.append(row_cells)
+
+        if not rows:
+            return
+
+        cols = max(len(r) for r in rows)
+        for r in rows:
+            while len(r) < cols:
+                r.append([])
+
+        pad = self.styles.table_cell_pad
+        min_col = self.styles.table_min_col
+        max_w = int(self._max_width(indent, quote_depth))
+
+        intrinsic = [min_col] * cols
+        for r in rows:
+            for ci, runs in enumerate(r):
+                w = sum(_run_width(self.cache, self.styles, run) for run in runs) + 2 * pad
+                intrinsic[ci] = max(intrinsic[ci], int(w), min_col)
+
+        total_intr = sum(intrinsic)
+        if total_intr <= max_w:
+            col_widths = list(intrinsic)
+            slack = max_w - total_intr
+            if slack and total_intr:
+                for i in range(cols):
+                    col_widths[i] += int(slack * (intrinsic[i] / total_intr))
+                col_widths[0] += max_w - sum(col_widths)
+            table_w = sum(col_widths)
+            scale = 1.0
+        else:
+            col_widths = list(intrinsic)
+            table_w = total_intr
+            scale = max_w / table_w
+
+        wrapped_rows: list[list[list[list[Run]]]] = []
+        row_heights: list[int] = []
+        for r in rows:
+            cell_lines: list[list[list[Run]]] = []
+            rh = 0
+            for ci, runs in enumerate(r):
+                cw = max(1.0, col_widths[ci] - 2 * pad)
+                lines = _wrap_runs(self.cache, self.styles, runs, cw) if runs else [[]]
+                cell_lines.append(lines)
+                h = sum(
+                    _line_height(self.cache, self.styles, ln) for ln in lines
+                ) or self.styles.size("body")
+                rh = max(rh, h + 2 * pad)
+            wrapped_rows.append(cell_lines)
+            row_heights.append(rh)
+
+        table_h = sum(row_heights) + 1
+        table_img = PIL.Image.new("L", (table_w, table_h), 255)
+        tdraw = PIL.ImageDraw.Draw(table_img)
+
+        y = 0
+        for ri, cell_lines in enumerate(wrapped_rows):
+            x = 0
+            rh = row_heights[ri]
+            for ci, lines in enumerate(cell_lines):
+                cw = col_widths[ci]
+                tdraw.rectangle((x, y, x + cw, y + rh), outline=0, width=1)
+                cy = y + pad
+                for line in lines:
+                    _draw_line_runs(
+                        tdraw, table_img, x + pad, cy, line, self.cache, self.styles
+                    )
+                    cy += _line_height(self.cache, self.styles, line)
+                x += cw
+            y += rh
+
+        if scale < 1.0 - 1e-6:
+            new_w = max(1, int(table_w * scale))
+            new_h = max(1, int(table_h * scale))
+            table_img = table_img.resize((new_w, new_h), PIL.Image.Resampling.NEAREST)
+
+        left = self._content_left(indent, quote_depth)
+        paste_y = self.y
+
+        def op(draw, img, table_img=table_img, left=left, paste_y=paste_y):
+            _paste_gray(img, table_img, (left, int(paste_y)))
+
+        self.ops.append(op)
+        self.y += table_img.height + self.styles.block_gap
+
+        pending_links = self._pending_table_links
+        pending_images = self._pending_table_images
+        self._pending_table_links = []
+        self._pending_table_images = []
+        self._emit_images(pending_images, indent, quote_depth)
+        self._emit_link_qrs(pending_links, indent, quote_depth)
 
 
 # ---------------------------------------------------------------------------
@@ -664,9 +1080,7 @@ def render_markdown(
     font_path: str,
     styles: StyleSheet | None = None,
 ) -> PIL.Image.Image:
-    """
-    Return an exact-width, 1-bit printable image.
-    """
+    """Return an exact-width, 1-bit printable image."""
     styles = styles or StyleSheet(font_path=font_path)
     layout = layout_markdown(markdown, width, font_path, styles)
 
@@ -675,6 +1089,4 @@ def render_markdown(
     for op in layout.ops:
         op(draw, gray)
 
-    # Explicit threshold → 1-bit (no dither)
-    bw = gray.point(lambda p: 0 if p < styles.threshold else 255, mode="1")
-    return bw
+    return gray.point(lambda p: 0 if p < styles.threshold else 255, mode="1")

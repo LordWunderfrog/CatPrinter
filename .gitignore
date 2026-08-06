@@ -9,3 +9,5 @@ dist/
 _md_preview.png
 _smoke_md.py
 MDSpec.md
+_dither_compare.png
+_dither_compare.py
