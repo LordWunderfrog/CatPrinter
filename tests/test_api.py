@@ -19,12 +19,27 @@ def test_extract_token_from_headers():
     assert _extract_token("Basic nope", None) is None
 
 
-def test_auth_paths():
+def test_path_requires_auth():
     assert _path_requires_auth("/print/reddit")
     assert _path_requires_auth("/printer/wake")
     assert not _path_requires_auth("/status")
     assert not _path_requires_auth("/ready")
     assert not _path_requires_auth("/health")
+
+
+def test_compose_captioned_image_stacks_title(tmp_path):
+    from api import _compose_captioned_image
+    from pathlib import Path
+
+    font = str(Path(__file__).resolve().parents[1] / "Lucon.ttf")
+    photo = PIL.Image.new("RGB", (200, 80), (128, 128, 128))
+    bare = _compose_captioned_image("", photo, width=200, font_path=font)
+    titled = _compose_captioned_image(
+        "Absolute unit", photo, width=200, font_path=font
+    )
+    assert titled.mode == "1"
+    assert titled.width == 200
+    assert titled.height > bare.height
 
 
 def test_text_rejects_absurd_size():

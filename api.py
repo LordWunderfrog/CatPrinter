@@ -80,6 +80,29 @@ class RedditPrintRequest(BaseModel):
     subreddit: str | None = Field(None, min_length=1, max_length=64)
 
 
+def _compose_captioned_image(
+    caption: str,
+    photo: PIL.Image.Image,
+    *,
+    width: int,
+    font_path: str,
+    font_size: int = 22,
+) -> PIL.Image.Image:
+    """Title (wrapped text) above a dithered photo, single 1-bit strip."""
+    photo_1 = prepare_raster_image(photo, width).convert("1")
+    text = (caption or "").strip()
+    if not text:
+        return photo_1
+    title_img = create_text_image(
+        text, width, font_path=font_path, font_size=font_size
+    ).convert("1")
+    gap = 8
+    out = PIL.Image.new("1", (width, title_img.height + gap + photo_1.height), 1)
+    out.paste(title_img, (0, 0))
+    out.paste(photo_1, (0, title_img.height + gap))
+    return out
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     cfg = get_config()
@@ -322,7 +345,20 @@ def print_reddit_endpoint(
         log.error("event=fetch_fail job=reddit req_id=%s error=%s", req_id, e)
         raise HTTPException(status_code=500, detail=f"Reddit fetch failed: {e}") from e
 
-    prepared = prepare_raster_image(img, cfg["width"]).convert("1")
+    prepared = _compose_captioned_image(
+        post.get("title") or "",
+        img,
+        width=cfg["width"],
+        font_path=cfg["font_path"],
+    )
+    if prepared.height > MAX_RENDER_HEIGHT:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"reddit render too tall ({prepared.height}px; "
+                f"max {MAX_RENDER_HEIGHT}px)"
+            ),
+        )
     _print_or_http("reddit", req_id, prepared)
 
     title = post.get("title", "")
