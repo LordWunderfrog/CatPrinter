@@ -173,6 +173,6 @@ automation:
     max_exceeded: silent
     trigger:
       - platform: tag
-        tag_id: print_chonk
+        tag_id: fb7b4343-d943-4aa5-ac78-4b640d98bca5
     action:
       - action: rest_command.cat_printer_print_reddit
