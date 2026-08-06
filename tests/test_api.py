@@ -52,4 +52,4 @@ def test_default_subreddit_env(monkeypatch):
     monkeypatch.setenv("DEFAULT_SUBREDDIT", "aww")
     assert _default_subreddit() == "aww"
     monkeypatch.setenv("DEFAULT_SUBREDDIT", "  ")
-    assert _default_subreddit() == "chonkers"
+    assert _default_subreddit() == "wunkus"

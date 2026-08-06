@@ -51,7 +51,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080/print/reddit -ContentT
 
 **HA revive package:** copy [`ha/cat_printer.yaml`](ha/cat_printer.yaml) to `/config/packages/`, enable `packages: !include_dir_named packages`, restart HA. Polls every 15m; up to 3 wakes; then one persistent notification + 6h cooldown. Not a substitute for pushing the cat’s button.
 
-**Reddit** (`POST /print/reddit`): random printable pic via [Pullpush](https://pullpush.io/); default subreddit from `DEFAULT_SUBREDDIT` (HA option / env; default `chonkers`). Override with JSON `subreddit`.
+**Reddit** (`POST /print/reddit`): random printable pic via [Pullpush](https://pullpush.io/); default subreddit from `DEFAULT_SUBREDDIT` (HA option / env; default `wunkus`). Override with JSON `subreddit`.
 
 **Markdown:** headings, paragraphs, bold/italic/strike, code, nested lists, task boxes, blockquotes, HR, tables, images (http/data/local; autocontrast+sharpen+Floyd–Steinberg dither), links as label + two-column end-of-paragraph QR (deduped), and ` ```qr ` fences. Text/QR stay hard-thresholded.
 

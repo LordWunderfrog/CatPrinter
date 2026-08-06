@@ -64,7 +64,7 @@ def _api_token() -> str:
 
 
 def _default_subreddit() -> str:
-    return (os.environ.get("DEFAULT_SUBREDDIT") or "chonkers").strip() or "chonkers"
+    return (os.environ.get("DEFAULT_SUBREDDIT") or "wunkus").strip() or "wunkus"
 
 
 class TextPrintRequest(BaseModel):

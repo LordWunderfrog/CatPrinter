@@ -78,7 +78,7 @@ def _http_get_bytes(
 
 
 def _normalize_subreddit(name: str) -> str:
-    # Accept "chonkers", "r/chonkers", "/r/Aww/"
+    # Accept "wunkus", "r/wunkus", "/r/Aww/"
     name = (name or "").strip().strip("/")
     if name.lower().startswith("r/"):
         name = name[2:].strip("/")
@@ -141,7 +141,7 @@ def list_hot_image_posts(subreddit: str, limit: int = 100) -> list[dict[str, str
 
 
 def pick_random_image_post(
-    subreddit: str = "chonkers",
+    subreddit: str = "wunkus",
     limit: int = 100,
 ) -> dict[str, str]:
     posts = list_hot_image_posts(subreddit, limit=limit)
@@ -149,7 +149,7 @@ def pick_random_image_post(
 
 
 def fetch_random_subreddit_image(
-    subreddit: str = "chonkers",
+    subreddit: str = "wunkus",
     limit: int = 100,
     attempts: int = 8,
     max_bytes: int = DEFAULT_MAX_IMAGE_BYTES,

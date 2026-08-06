@@ -22,6 +22,6 @@ fi
 
 export API_HOST="${API_HOST:-0.0.0.0}"
 export API_PORT="${API_PORT:-8080}"
-export DEFAULT_SUBREDDIT="${DEFAULT_SUBREDDIT:-chonkers}"
+export DEFAULT_SUBREDDIT="${DEFAULT_SUBREDDIT:-wunkus}"
 
 exec python /app/api.py

@@ -7,4 +7,4 @@ Collection **Cat Printer** lives in Postman workspace **My Workspace** (personal
 
 Open the Postman extension → sync/pull if needed → select environment → hit **Health** then **Print reddit default**.
 
-Variables: `baseUrl`, `api_token` (secret, optional), `subreddit`.
+Variables: `baseUrl`, `api_token` (secret, optional), `subreddit` (default `wunkus`).
