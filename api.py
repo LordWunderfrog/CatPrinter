@@ -5,18 +5,16 @@ HTTP API for the YHK cat printer. Intended for LAN / HA / reverse-proxy callers.
   GET  /ready    — RFCOMM probe; 503 if sleepy/unreachable (no auth)
   GET  /status   — same probe as /ready but always HTTP 200 (HA sensors)
   POST /printer/wake — BT nudge + RFCOMM probe (auth if API_TOKEN set)
-  POST /print/text      JSON: {"text": "...", "font_size": 65}
-  POST /print/markdown  JSON: {"markdown": "..."}
-  POST /print/image     multipart form field "file" (image)
-  POST /print/reddit    JSON: {"subreddit": "..."}  # optional; DEFAULT_SUBREDDIT
+  POST /print/text|markdown|image|reddit — validate, spool to disk, 202
 
 Env (in addition to yhk_printer / printer_service):
   API_HOST, API_PORT, API_TOKEN, DEFAULT_SUBREDDIT
   MAX_TEXT_CHARS, MAX_MARKDOWN_CHARS, MAX_UPLOAD_BYTES, MAX_IMAGE_PIXELS
-  MAX_RENDER_HEIGHT, MAX_PRINT_QUEUE
+  MAX_RENDER_HEIGHT, MAX_PRINT_QUEUE, PRINT_SPOOL_DIR, SPOOL_TTL_S
 
-Print routes validate/prepare then enqueue (HTTP 202). Printer offline does not
-fail the request — the worker retries. Callers stay dumb: accepted or rejected.
+Print routes write a raster to the disk spool and return 202. Drain runs
+opportunistically (after enqueue if awake, after wake/status when awake) —
+no forever RFCOMM polling. Callers stay dumb: accepted or rejected.
 
 Auth (only if API_TOKEN is set): X-Api-Key or Authorization: Bearer.
 NFC / HA: same on /print/* and /printer/wake. /health, /ready, /status stay open.
@@ -40,7 +38,7 @@ from pydantic import BaseModel, Field
 from image_prep import prepare_raster_image
 from markdown_renderer import RenderTooTall, render_markdown
 import printer_service
-from print_queue import QueueFull, print_queue
+from print_spool import QueueFull, print_spool
 from reddit_image import RedditImageError, fetch_random_subreddit_image
 from yhk_printer import create_text_image, get_config
 
@@ -104,22 +102,28 @@ def _compose_captioned_image(
     return out
 
 
+def _maybe_drain_after_probe(body: dict, *, reason: str) -> None:
+    if body.get("printer") in ("awake", "busy"):
+        print_spool.drain_async(reason=reason)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     cfg = get_config()
     token_on = bool(_api_token())
-    print_queue.start()
     log.info(
         "event=startup printer_mac=%s printer_port=%s auth=%s default_subreddit=%s "
-        "queue_max=%s",
+        "spool=%s queue_max=%s",
         cfg["mac"],
         cfg["port"],
         "on" if token_on else "off",
         _default_subreddit(),
-        print_queue.maxsize,
+        print_spool.stats()["spool_dir"],
+        print_spool.maxsize,
     )
+    # Rebuild/restart: try once if the cat is already up.
+    print_spool.drain_async(reason="startup")
     yield
-    print_queue.stop()
 
 
 app = FastAPI(title="Cat Printer", version="1.0.0", lifespan=lifespan)
@@ -148,9 +152,9 @@ def _enqueue_or_http(
     img: PIL.Image.Image,
     **extra,
 ) -> JSONResponse:
-    """Accept a prepared raster into the queue. Printer offline is not a reject."""
+    """Spool a prepared raster. Printer offline is not a reject."""
     try:
-        job_id = print_queue.submit(kind=kind, req_id=req_id, image=img, meta=extra)
+        job_id = print_spool.submit(kind=kind, req_id=req_id, image=img, meta=extra)
     except QueueFull as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     body = {
@@ -161,6 +165,7 @@ def _enqueue_or_http(
         **extra,
     }
     return JSONResponse(status_code=202, content=body)
+
 
 @app.middleware("http")
 async def auth_and_request_log(request: Request, call_next):
@@ -211,7 +216,7 @@ def health():
         "printer_port": cfg["port"],
         "auth_required": bool(_api_token()),
         "default_subreddit": _default_subreddit(),
-        **print_queue.stats(),
+        **print_spool.stats(),
     }
 
 
@@ -222,6 +227,7 @@ def ready():
     200 awake / busy; 503 sleepy or unreachable.
     """
     body = printer_service.probe(timeout=READY_TIMEOUT_S)
+    _maybe_drain_after_probe(body, reason="ready")
     if body.get("ok"):
         return body
     return JSONResponse(status_code=503, content=body)
@@ -230,7 +236,9 @@ def ready():
 @app.get("/status")
 def status():
     """Same probe as /ready, always HTTP 200 — friendlier for HA REST sensors."""
-    return printer_service.probe(timeout=READY_TIMEOUT_S)
+    body = printer_service.probe(timeout=READY_TIMEOUT_S)
+    _maybe_drain_after_probe(body, reason="status")
+    return body
 
 
 @app.post("/printer/wake")
@@ -240,6 +248,7 @@ def printer_wake():
     Does not loop — HA owns attempt limits / cooldown.
     """
     body = printer_service.wake(probe_timeout=max(READY_TIMEOUT_S, 8.0))
+    _maybe_drain_after_probe(body, reason="wake")
     if body.get("ok"):
         return body
     return JSONResponse(status_code=503, content=body)

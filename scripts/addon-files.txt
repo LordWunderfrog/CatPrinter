@@ -2,7 +2,7 @@
 # Format: source_relative_to_repo_root[|dest_name_in_pack]
 # Lines starting with # and blank lines are ignored.
 
-print_queue.py
+print_spool.py
 yhk_printer.py
 printer_service.py
 image_prep.py
