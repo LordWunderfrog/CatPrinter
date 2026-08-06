@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Random Reddit Image</title>
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script>
+    $(function() {
+      var subreddit = 'chonkers';
+      var randomIndex = Math.floor(Math.random() * 100);
+
+	  console.log(randomIndex);
+
+      $.getJSON(
+        'https://www.reddit.com/r/' + subreddit + '/hot.json?jsonp=?&limit=100',
+        function(data) {
+          // data may or may not contain a 'data.children' array
+          if (!data || !data.data || !data.data.children) {
+            console.log("Invalid JSON response");
+            return;
+          }
+
+          var post = data.data.children[randomIndex];
+          if (!post || !post.data) {
+            console.log("No post at that index");
+            return;
+          }
+
+          var url = post.data.url;
+          // Check if it's likely an image
+          if (url && url.match(/\.(jpg|jpeg|png|gif)$/i)) {
+            // Append <img>
+            $("<img/>").attr("src", url).appendTo("#image");
+          } else {
+            console.log("Random post wasn't a direct image: " + url);
+			document.getElementById('image').innerHTML = 'Random post wasnt a direct image';
+          }
+        }
+      );
+    });
+  </script>
+  
+  <style>
+	div#image > img{
+		width:50px;
+		filter:blur(4px);
+	}
+  </style>
+</head>
+<body>
+  <h1>Random image generator</h1>
+  <div id="image"></div>
+</body>
+</html>
