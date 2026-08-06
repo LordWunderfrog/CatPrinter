@@ -57,6 +57,13 @@ def is_retryable_connect_error(exc: BaseException) -> bool:
     return "host is down" in msg or "timed out" in msg
 
 
+def is_busy_error(exc: BaseException) -> bool:
+    """RFCOMM/adapter still settling after a prior session (not sleepy)."""
+    if isinstance(exc, OSError) and exc.errno == errno.EBUSY:
+        return True
+    return "device or resource busy" in str(exc).lower()
+
+
 def connect(mac=None, port=None, timeout=10.0, retries=None, retry_delay=None):
     """
     Open RFCOMM socket to the printer. Retries transient Host-is-down / timeout.

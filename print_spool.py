@@ -25,6 +25,8 @@ MAX_PRINT_QUEUE = int(os.environ.get("MAX_PRINT_QUEUE", "32"))
 SPOOL_TTL_S = float(os.environ.get("SPOOL_TTL_S", str(7 * 24 * 3600)))
 # While jobs are parked (printer sleepy), retry drain on this interval — not when empty.
 SPOOL_RETRY_S = float(os.environ.get("SPOOL_RETRY_S", "120"))
+# Brief pause between jobs so RFCOMM can release (avoids EBUSY mid-drain).
+SPOOL_INTER_JOB_GAP_S = float(os.environ.get("SPOOL_INTER_JOB_GAP_S", "1.5"))
 QUEUE_PRINT_FAIL_LIMIT = int(os.environ.get("QUEUE_PRINT_FAIL_LIMIT", "3"))
 
 
@@ -207,6 +209,8 @@ class PrintSpool:
                 )
                 self._drop(job_id)
                 drained += 1
+                if SPOOL_INTER_JOB_GAP_S > 0:
+                    time.sleep(SPOOL_INTER_JOB_GAP_S)
         finally:
             self._drain_lock.release()
 

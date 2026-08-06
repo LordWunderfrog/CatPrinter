@@ -15,6 +15,7 @@ from typing import Callable
 
 from yhk_printer import (
     get_config,
+    is_busy_error,
     is_retryable_connect_error,
     print_image,
     printer_session,
@@ -31,6 +32,9 @@ WAKE_BLUETOOTHCTL = os.environ.get("WAKE_BLUETOOTHCTL", "1").strip() not in (
     "false",
     "no",
 )
+# EBUSY after a prior print — wait and retry before treating as unavailable.
+PRINT_BUSY_RETRIES = int(os.environ.get("PRINT_BUSY_RETRIES", "5"))
+PRINT_BUSY_SETTLE_S = float(os.environ.get("PRINT_BUSY_SETTLE_S", "2.0"))
 # One full session retry after a wake nudge (connect() still has its own micro-retries).
 # Documented budget: 1 dial with N micro-retries, then at most one wake+redial.
 
@@ -148,15 +152,22 @@ def run_print(
 
       1. Open session (connect micro-retries inside yhk_printer.connect)
       2. Run job
-      3. On retryable connect failure only: one bluetoothctl nudge + one more session
+      3. On EBUSY: settle and retry (adapter catching up after prior job)
+      4. On sleepy/host-down: one bluetoothctl nudge + one more session
 
     Raises PrinterUnavailable / PrintFailed. Never raises HTTPException.
     """
     cfg = get_config()
     with _print_lock:
         try:
-            _run_session(fn)
+            _run_session_settled(job, req_id, fn)
         except OSError as first:
+            if is_busy_error(first):
+                # Settled retries already exhausted inside _run_session_settled.
+                log.error(
+                    "event=print_fail job=%s req_id=%s error=%s", job, req_id, first
+                )
+                raise PrinterUnavailable(str(first)) from first
             if not is_retryable_connect_error(first):
                 log.error(
                     "event=print_fail job=%s req_id=%s error=%s", job, req_id, first
@@ -170,7 +181,7 @@ def run_print(
             )
             bluetoothctl_nudge(cfg["mac"])
             try:
-                _run_session(fn)
+                _run_session_settled(job, req_id, fn)
             except OSError as second:
                 log.error(
                     "event=print_fail job=%s req_id=%s error=%s after_wake=1",
@@ -200,3 +211,30 @@ def print_raster(job: str, req_id: str, img) -> None:
 def _run_session(fn: Callable) -> None:
     with printer_session() as soc:
         fn(soc)
+
+
+def _run_session_settled(job: str, req_id: str, fn: Callable) -> None:
+    """Open a session; on EBUSY wait and retry before surfacing the error."""
+    attempts = max(1, PRINT_BUSY_RETRIES)
+    last: OSError | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            _run_session(fn)
+            return
+        except OSError as e:
+            last = e
+            if not is_busy_error(e) or attempt >= attempts:
+                raise
+            log.warning(
+                "event=print_busy_settle job=%s req_id=%s attempt=%s/%s error=%s "
+                "sleep_s=%s",
+                job,
+                req_id,
+                attempt,
+                attempts,
+                e,
+                PRINT_BUSY_SETTLE_S,
+            )
+            time.sleep(PRINT_BUSY_SETTLE_S)
+    assert last is not None
+    raise last
