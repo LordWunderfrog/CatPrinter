@@ -3,6 +3,7 @@
 # Output: dist/cat_printer/
 #   --deploy  also mirrors that folder to the HA /addons share
 # Override path with CAT_PRINTER_ADDON_DEPLOY (default //home.lan/addons/cat_printer)
+# File list: scripts/addon-files.txt (shared with pack-addon.ps1)
 set -euo pipefail
 
 DEPLOY=0
@@ -22,12 +23,33 @@ done
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/dist/cat_printer"
+MANIFEST="$(dirname "$0")/addon-files.txt"
+
+if [[ ! -f "$MANIFEST" ]]; then
+  echo "Missing pack manifest: $MANIFEST" >&2
+  exit 1
+fi
 
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
-cp "$ROOT/yhk_printer.py" "$ROOT/image_prep.py" "$ROOT/reddit_image.py" "$ROOT/api.py" "$ROOT/cat-printer.py" "$ROOT/markdown_renderer.py" "$ROOT/requirements.txt" "$ROOT/Lucon.ttf" "$OUT/"
-cp "$ROOT/ha-addon/config.yaml" "$ROOT/ha-addon/Dockerfile" "$ROOT/ha-addon/run.sh" "$OUT/"
+while IFS= read -r line || [[ -n "$line" ]]; do
+  line="${line%%$'\r'}"
+  line="$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  [[ -z "$line" || "$line" == \#* ]] && continue
+  src_rel="${line%%|*}"
+  if [[ "$line" == *"|"* ]]; then
+    dest_name="${line#*|}"
+  else
+    dest_name="$(basename "$src_rel")"
+  fi
+  src="$ROOT/$src_rel"
+  if [[ ! -e "$src" ]]; then
+    echo "Pack source missing: $src" >&2
+    exit 1
+  fi
+  cp "$src" "$OUT/$dest_name"
+done < "$MANIFEST"
 
 echo "Packed add-on at $OUT"
 

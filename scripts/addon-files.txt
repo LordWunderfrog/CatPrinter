@@ -1,0 +1,16 @@
+# Files copied into dist/cat_printer (and keep root Dockerfile COPY in sync).
+# Format: source_relative_to_repo_root[|dest_name_in_pack]
+# Lines starting with # and blank lines are ignored.
+
+yhk_printer.py
+printer_service.py
+image_prep.py
+reddit_image.py
+api.py
+cat-printer.py
+markdown_renderer.py
+requirements.txt
+Lucon.ttf
+ha-addon/config.yaml|config.yaml
+ha-addon/Dockerfile|Dockerfile
+ha-addon/run.sh|run.sh

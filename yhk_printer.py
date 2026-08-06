@@ -1,6 +1,8 @@
 """
 YHK cat/rabbit thermal printer (Classic Bluetooth RFCOMM).
-Reusable library: connect, print_image, print_text.
+Transport + protocol: connect, session, print_image, print_text.
+Job lock / wake / recovery live in printer_service.
+
 Config from env: PRINTER_MAC, PRINTER_PORT, PRINTER_WIDTH, PRINTER_FONT,
   PRINTER_CONNECT_RETRIES, PRINTER_CONNECT_RETRY_DELAY.
 """
@@ -16,6 +18,13 @@ import PIL.ImageDraw
 import PIL.ImageFont
 import PIL.ImageChops
 import PIL.ImageOps
+
+# --- Protocol settle delays (YHK Classic; removing these causes flaky jobs) ---
+PROBE_STEP_DELAY_S = float(os.environ.get("PROBE_STEP_DELAY_S", "0.5"))
+PRINT_INIT_DELAY_S = float(os.environ.get("PRINT_INIT_DELAY_S", "0.5"))
+PRINT_START_DELAY_S = float(os.environ.get("PRINT_START_DELAY_S", "0.5"))
+PRINT_DATA_SETTLE_S = float(os.environ.get("PRINT_DATA_SETTLE_S", "0.5"))
+PRINT_END_DELAY_S = float(os.environ.get("PRINT_END_DELAY_S", "0.5"))
 
 # Transient Classic-BT failures (sleepy / radio glitch). Not a keep-awake strategy.
 _RETRYABLE_ERRNOS = {
@@ -82,18 +91,19 @@ def connect(mac=None, port=None, timeout=10.0, retries=None, retry_delay=None):
 @contextmanager
 def printer_session(probe=True, timeout=10.0):
     """
-    Open a printer connection, optionally probe status/serial/product, then close.
-    Use for one-shot print jobs (CLI, API).
+    Open a printer connection, optionally run the status/serial/product probe
+    sequence (with PROBE_STEP_DELAY_S between steps), then close.
+    Micro-retries on connect are owned here; wake+retry is printer_service.
     """
     s = connect(timeout=timeout)
     try:
         if probe:
             get_printer_status(s)
-            sleep(0.5)
+            sleep(PROBE_STEP_DELAY_S)
             get_printer_serial_number(s)
-            sleep(0.5)
+            sleep(PROBE_STEP_DELAY_S)
             get_printer_product_info(s)
-            sleep(0.5)
+            sleep(PROBE_STEP_DELAY_S)
         yield s
     finally:
         s.close()
@@ -213,13 +223,13 @@ def print_image(soc, im, width=None):
         )
     )
     _initialize_printer(soc)
-    sleep(0.5)
+    sleep(PRINT_INIT_DELAY_S)
     _send_start_print_sequence(soc)
-    sleep(0.5)
+    sleep(PRINT_START_DELAY_S)
     soc.sendall(buf)
-    sleep(0.5)
+    sleep(PRINT_DATA_SETTLE_S)
     _send_end_print_sequence(soc)
-    sleep(0.5)
+    sleep(PRINT_END_DELAY_S)
 
 
 def print_text(soc, text, font_path=None, width=None, font_size=12):

@@ -10,7 +10,7 @@ HTTP API for the YHK cat printer. Intended for LAN / HA / reverse-proxy callers.
   POST /print/image     multipart form field "file" (image)
   POST /print/reddit    JSON: {"subreddit": "..."}  # optional; DEFAULT_SUBREDDIT
 
-Env (in addition to yhk_printer):
+Env (in addition to yhk_printer / printer_service):
   API_HOST, API_PORT, API_TOKEN, DEFAULT_SUBREDDIT
   MAX_TEXT_CHARS, MAX_MARKDOWN_CHARS, MAX_UPLOAD_BYTES, MAX_IMAGE_PIXELS
   MAX_RENDER_HEIGHT
@@ -26,8 +26,6 @@ import io
 import logging
 import os
 import secrets
-import subprocess
-import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -40,16 +38,10 @@ from pydantic import BaseModel, Field
 
 from image_prep import prepare_raster_image
 from markdown_renderer import RenderTooTall, render_markdown
+import printer_service
+from printer_service import PrintFailed, PrinterUnavailable
 from reddit_image import RedditImageError, fetch_random_subreddit_image
-from yhk_printer import (
-    create_text_image,
-    get_config,
-    is_retryable_connect_error,
-    print_image,
-    printer_session,
-)
-
-_print_lock = threading.Lock()
+from yhk_printer import create_text_image, get_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,11 +57,6 @@ MAX_IMAGE_PIXELS = int(os.environ.get("MAX_IMAGE_PIXELS", str(25_000_000)))
 # ~2.5m of paper at ~8 dots/mm — long recipes OK; newline bombs fail hard.
 MAX_RENDER_HEIGHT = int(os.environ.get("MAX_RENDER_HEIGHT", str(20_000)))
 READY_TIMEOUT_S = float(os.environ.get("READY_TIMEOUT_S", "5"))
-WAKE_BLUETOOTHCTL = os.environ.get("WAKE_BLUETOOTHCTL", "1").strip() not in (
-    "0",
-    "false",
-    "no",
-)
 
 
 def _api_token() -> str:
@@ -127,6 +114,17 @@ def _path_requires_auth(path: str) -> bool:
     return path.startswith("/print") or path == "/printer/wake"
 
 
+def _print_or_http(job: str, req_id: str, img) -> None:
+    try:
+        printer_service.print_raster(job, req_id, img)
+    except PrinterUnavailable as e:
+        raise HTTPException(
+            status_code=502, detail=f"Printer connection failed: {e}"
+        ) from e
+    except PrintFailed as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @app.middleware("http")
 async def auth_and_request_log(request: Request, call_next):
     req_id = uuid.uuid4().hex[:8]
@@ -179,86 +177,13 @@ def health():
     }
 
 
-def _bluetoothctl_nudge(mac: str) -> str | None:
-    """Best-effort Classic reconnect. Returns a short note or None if skipped."""
-    if not WAKE_BLUETOOTHCTL:
-        return None
-    try:
-        subprocess.run(
-            ["bluetoothctl", "disconnect", mac],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-        time.sleep(1.0)
-        proc = subprocess.run(
-            ["bluetoothctl", "connect", mac],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        out = ((proc.stdout or "") + (proc.stderr or "")).strip()
-        log.info(
-            "event=wake_bluetoothctl mac=%s returncode=%s out=%r",
-            mac,
-            proc.returncode,
-            out[:200],
-        )
-        return out[:200] if out else f"bluetoothctl exit {proc.returncode}"
-    except FileNotFoundError:
-        log.info("event=wake_bluetoothctl skipped reason=not_installed")
-        return "bluetoothctl not installed"
-    except Exception as e:
-        log.warning("event=wake_bluetoothctl_fail mac=%s error=%s", mac, e)
-        return str(e)
-
-
-def _probe_printer(*, timeout: float) -> dict:
-    """
-    RFCOMM probe under the print lock.
-    Returns a payload dict with keys: ok, printer, printer_mac, and optional detail.
-    printer is awake|busy|sleepy|error.
-    """
-    cfg = get_config()
-    if not _print_lock.acquire(blocking=False):
-        log.info("event=probe printer=busy mac=%s", cfg["mac"])
-        return {"ok": True, "printer": "busy", "printer_mac": cfg["mac"]}
-
-    try:
-        try:
-            with printer_session(probe=True, timeout=timeout):
-                pass
-        except OSError as e:
-            log.warning("event=probe printer=sleepy mac=%s error=%s", cfg["mac"], e)
-            return {
-                "ok": False,
-                "printer": "sleepy",
-                "printer_mac": cfg["mac"],
-                "detail": str(e),
-            }
-        except Exception as e:
-            log.warning("event=probe printer=error mac=%s error=%s", cfg["mac"], e)
-            return {
-                "ok": False,
-                "printer": "error",
-                "printer_mac": cfg["mac"],
-                "detail": str(e),
-            }
-        log.info("event=probe printer=awake mac=%s", cfg["mac"])
-        return {"ok": True, "printer": "awake", "printer_mac": cfg["mac"]}
-    finally:
-        _print_lock.release()
-
-
 @app.get("/ready")
 def ready():
     """
     Readiness: can we open RFCOMM to the printer right now?
     200 awake / busy; 503 sleepy or unreachable.
     """
-    body = _probe_printer(timeout=READY_TIMEOUT_S)
+    body = printer_service.probe(timeout=READY_TIMEOUT_S)
     if body.get("ok"):
         return body
     return JSONResponse(status_code=503, content=body)
@@ -267,7 +192,7 @@ def ready():
 @app.get("/status")
 def status():
     """Same probe as /ready, always HTTP 200 — friendlier for HA REST sensors."""
-    return _probe_printer(timeout=READY_TIMEOUT_S)
+    return printer_service.probe(timeout=READY_TIMEOUT_S)
 
 
 @app.post("/printer/wake")
@@ -276,63 +201,10 @@ def printer_wake():
     Bounded nudge: optional bluetoothctl disconnect/connect, then RFCOMM probe.
     Does not loop — HA owns attempt limits / cooldown.
     """
-    cfg = get_config()
-    mac = cfg["mac"]
-    log.info("event=wake_start mac=%s", mac)
-    bt_note = _bluetoothctl_nudge(mac)
-    body = _probe_printer(timeout=max(READY_TIMEOUT_S, 8.0))
-    if bt_note:
-        body = {**body, "bluetoothctl": bt_note}
+    body = printer_service.wake(probe_timeout=max(READY_TIMEOUT_S, 8.0))
     if body.get("ok"):
-        log.info("event=wake_ok mac=%s printer=%s", mac, body.get("printer"))
         return body
-    log.warning("event=wake_fail mac=%s detail=%s", mac, body.get("detail"))
     return JSONResponse(status_code=503, content=body)
-
-
-def _print_with_session(job: str, req_id: str, fn):
-    """
-    Run a print job under the lock. On transient BT failure, one bluetoothctl
-    nudge + one more session attempt — callers (NFC, curl, HA) stay dumb.
-    """
-    cfg = get_config()
-    with _print_lock:
-        try:
-            with printer_session() as soc:
-                fn(soc)
-        except OSError as first:
-            if not is_retryable_connect_error(first):
-                log.error("event=print_fail job=%s req_id=%s error=%s", job, req_id, first)
-                raise HTTPException(
-                    status_code=502, detail=f"Printer connection failed: {first}"
-                ) from first
-            log.warning(
-                "event=print_wake_retry job=%s req_id=%s error=%s",
-                job,
-                req_id,
-                first,
-            )
-            _bluetoothctl_nudge(cfg["mac"])
-            try:
-                with printer_session() as soc:
-                    fn(soc)
-            except OSError as second:
-                log.error(
-                    "event=print_fail job=%s req_id=%s error=%s after_wake=1",
-                    job,
-                    req_id,
-                    second,
-                )
-                raise HTTPException(
-                    status_code=502, detail=f"Printer connection failed: {second}"
-                ) from second
-            except Exception as e:
-                log.error("event=print_fail job=%s req_id=%s error=%s", job, req_id, e)
-                raise HTTPException(status_code=500, detail=str(e)) from e
-        except Exception as e:
-            log.error("event=print_fail job=%s req_id=%s error=%s", job, req_id, e)
-            raise HTTPException(status_code=500, detail=str(e)) from e
-    log.info("event=print_ok job=%s req_id=%s", job, req_id)
 
 
 @app.post("/print/text")
@@ -355,7 +227,7 @@ def print_text_endpoint(request: Request, body: TextPrintRequest):
         ).convert("1")
     except ValueError as e:
         raise HTTPException(status_code=413, detail=str(e)) from e
-    _print_with_session("text", req_id, lambda soc: print_image(soc, img))
+    _print_or_http("text", req_id, img)
     return {"ok": True, "printed": "text"}
 
 
@@ -383,7 +255,7 @@ def print_markdown_endpoint(request: Request, body: MarkdownPrintRequest):
         log.error("event=render_fail job=markdown req_id=%s error=%s", req_id, e)
         raise HTTPException(status_code=500, detail=f"Markdown render failed: {e}") from e
 
-    _print_with_session("markdown", req_id, lambda soc: print_image(soc, img))
+    _print_or_http("markdown", req_id, img)
     return {"ok": True, "printed": "markdown"}
 
 
@@ -422,7 +294,7 @@ def print_image_endpoint(request: Request, file: UploadFile = File(...)):
         h,
     )
     prepared = prepare_raster_image(img, cfg["width"]).convert("1")
-    _print_with_session("image", req_id, lambda soc: print_image(soc, prepared))
+    _print_or_http("image", req_id, prepared)
     return {"ok": True, "printed": "image", "filename": file.filename}
 
 
@@ -451,7 +323,7 @@ def print_reddit_endpoint(
         raise HTTPException(status_code=500, detail=f"Reddit fetch failed: {e}") from e
 
     prepared = prepare_raster_image(img, cfg["width"]).convert("1")
-    _print_with_session("reddit", req_id, lambda soc: print_image(soc, prepared))
+    _print_or_http("reddit", req_id, prepared)
 
     title = post.get("title", "")
     url = post.get("url", "")

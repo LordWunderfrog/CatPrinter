@@ -6,7 +6,8 @@ Fork notes (Wunderfrog): library + HTTP API for Home Assistant / LAN use.
 
 | Piece | Role |
 |-------|------|
-| `yhk_printer.py` | Library (RFCOMM connect / print) |
+| `yhk_printer.py` | RFCOMM transport + protocol |
+| `printer_service.py` | Lock, probe, wake, print recovery |
 | `image_prep.py` | Shared photo prep (EXIF, dither) |
 | `cat-printer.py` | CLI smoke test |
 | `reddit_image.py` | Random hot-image pick from a subreddit |

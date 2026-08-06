@@ -1,6 +1,7 @@
 # Assemble a self-contained HA local add-on folder from the single source tree.
 # Output: dist/cat_printer/
 #   -Deploy  also mirrors that folder to the HA /addons share (default \\home.lan\addons\cat_printer)
+# File list: scripts/addon-files.txt (shared with pack-addon.sh)
 param(
     [switch]$Deploy,
     [string]$DeployPath = $(if ($env:CAT_PRINTER_ADDON_DEPLOY) { $env:CAT_PRINTER_ADDON_DEPLOY } else { "\\home.lan\addons\cat_printer" })
@@ -9,21 +10,25 @@ param(
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $Out = Join-Path $Root "dist\cat_printer"
+$Manifest = Join-Path $PSScriptRoot "addon-files.txt"
+
+if (-not (Test-Path $Manifest)) {
+    throw "Missing pack manifest: $Manifest"
+}
 
 if (Test-Path $Out) { Remove-Item -Recurse -Force $Out }
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
-Copy-Item (Join-Path $Root "yhk_printer.py") $Out
-Copy-Item (Join-Path $Root "image_prep.py") $Out
-Copy-Item (Join-Path $Root "api.py") $Out
-Copy-Item (Join-Path $Root "cat-printer.py") $Out
-Copy-Item (Join-Path $Root "reddit_image.py") $Out
-Copy-Item (Join-Path $Root "markdown_renderer.py") $Out
-Copy-Item (Join-Path $Root "requirements.txt") $Out
-Copy-Item (Join-Path $Root "Lucon.ttf") $Out
-Copy-Item (Join-Path $Root "ha-addon\config.yaml") $Out
-Copy-Item (Join-Path $Root "ha-addon\Dockerfile") $Out
-Copy-Item (Join-Path $Root "ha-addon\run.sh") $Out
+Get-Content $Manifest | ForEach-Object {
+    $line = $_.Trim()
+    if (-not $line -or $line.StartsWith("#")) { return }
+    $parts = $line.Split("|", 2)
+    $srcRel = $parts[0].Trim()
+    $destName = if ($parts.Count -gt 1 -and $parts[1].Trim()) { $parts[1].Trim() } else { Split-Path $srcRel -Leaf }
+    $src = Join-Path $Root ($srcRel -replace "/", "\")
+    if (-not (Test-Path $src)) { throw "Pack source missing: $src" }
+    Copy-Item $src (Join-Path $Out $destName)
+}
 
 Write-Host "Packed add-on at $Out"
 

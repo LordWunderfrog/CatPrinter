@@ -11,7 +11,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY yhk_printer.py image_prep.py reddit_image.py api.py cat-printer.py markdown_renderer.py Lucon.ttf ./
+COPY yhk_printer.py printer_service.py image_prep.py reddit_image.py api.py cat-printer.py markdown_renderer.py Lucon.ttf ./
+# Keep the above in sync with scripts/addon-files.txt (pack manifest).
 COPY ha-addon/run.sh /run.sh
 RUN chmod a+x /run.sh
 
