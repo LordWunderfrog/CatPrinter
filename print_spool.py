@@ -26,9 +26,10 @@ SPOOL_TTL_S = float(os.environ.get("SPOOL_TTL_S", str(7 * 24 * 3600)))
 # While jobs are parked (printer sleepy), retry drain on this interval — not when empty.
 SPOOL_RETRY_S = float(os.environ.get("SPOOL_RETRY_S", "120"))
 # After RFCOMM "done", wait for the mechanism to finish feeding before the next job.
+# Bias long: smashed pages waste more paper than a boring gap.
 # settle_s = max(SPOOL_INTER_JOB_GAP_S, image_height / SPOOL_PX_PER_SEC)
-SPOOL_INTER_JOB_GAP_S = float(os.environ.get("SPOOL_INTER_JOB_GAP_S", "2.0"))
-SPOOL_PX_PER_SEC = float(os.environ.get("SPOOL_PX_PER_SEC", "55"))
+SPOOL_INTER_JOB_GAP_S = float(os.environ.get("SPOOL_INTER_JOB_GAP_S", "4.0"))
+SPOOL_PX_PER_SEC = float(os.environ.get("SPOOL_PX_PER_SEC", "30"))
 QUEUE_PRINT_FAIL_LIMIT = int(os.environ.get("QUEUE_PRINT_FAIL_LIMIT", "3"))
 
 

@@ -117,7 +117,7 @@ def test_drain_picks_up_mid_drain_enqueue(tmp_path, monkeypatch):
 def test_mech_settle_scales_with_height(monkeypatch):
     from print_spool import _mech_settle_s
 
-    monkeypatch.setattr("print_spool.SPOOL_INTER_JOB_GAP_S", 2.0)
-    monkeypatch.setattr("print_spool.SPOOL_PX_PER_SEC", 55.0)
-    assert _mech_settle_s(50) == 2.0
-    assert abs(_mech_settle_s(1100) - (1100 / 55.0)) < 1e-6
+    monkeypatch.setattr("print_spool.SPOOL_INTER_JOB_GAP_S", 4.0)
+    monkeypatch.setattr("print_spool.SPOOL_PX_PER_SEC", 30.0)
+    assert _mech_settle_s(50) == 4.0
+    assert abs(_mech_settle_s(1200) - (1200 / 30.0)) < 1e-6

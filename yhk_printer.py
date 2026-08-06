@@ -25,8 +25,6 @@ PRINT_INIT_DELAY_S = float(os.environ.get("PRINT_INIT_DELAY_S", "0.5"))
 PRINT_START_DELAY_S = float(os.environ.get("PRINT_START_DELAY_S", "0.5"))
 PRINT_DATA_SETTLE_S = float(os.environ.get("PRINT_DATA_SETTLE_S", "0.5"))
 PRINT_END_DELAY_S = float(os.environ.get("PRINT_END_DELAY_S", "0.5"))
-# Extra LF after each job so consecutive prints aren't glued on paper.
-PRINT_FEED_LINES = int(os.environ.get("PRINT_FEED_LINES", "10"))
 
 # Transient Classic-BT failures (sleepy / radio glitch). Not a keep-awake strategy.
 _RETRYABLE_ERRNOS = {
@@ -142,9 +140,7 @@ def _send_start_print_sequence(soc):
 
 
 def _send_end_print_sequence(soc):
-    n = max(0, PRINT_FEED_LINES)
-    if n:
-        soc.send(b"\x0a" * n)
+    soc.send(b"\x0a\x0a\x0a\x0a")
 
 
 def _trim_image(im):
