@@ -8,6 +8,7 @@ Fork notes (Wunderfrog): library + HTTP API for Home Assistant / LAN use.
 |-------|------|
 | `yhk_printer.py` | RFCOMM transport + protocol |
 | `printer_service.py` | Lock, probe, wake, print recovery |
+| `print_queue.py` | In-memory FIFO; worker retries when printer sleepy |
 | `image_prep.py` | Shared photo prep (EXIF, dither) |
 | `cat-printer.py` | CLI smoke test |
 | `reddit_image.py` | Random hot-image pick from a subreddit |
@@ -44,6 +45,8 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8080/print/reddit -ContentT
 ```
 
 **Auth:** if `API_TOKEN` is set, `/print/*` and `/printer/wake` require `X-Api-Key` or `Authorization: Bearer …`. `/health`, `/ready`, and `/status` stay open (HA sensors). Leave token empty for open LAN during early bring-up. HA package: set `cat_printer_api_token` in `secrets.yaml` to the same value.
+
+**Queue:** `/print/*` validates and prepares the image, then returns **202** with `queued: true`. A background worker prints when RFCOMM works; sleepy/offline printer does **not** fail the HTTP call. Queue full → 503. Depth shows on `/health`.
 
 **Ready / status:** `GET /ready` probes RFCOMM — `printer: awake|busy` (200) or `sleepy` (503). `GET /status` is the same probe always as HTTP 200 (better for HA REST sensors).
 

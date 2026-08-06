@@ -13,12 +13,13 @@ HTTP API for the YHK cat printer. Intended for LAN / HA / reverse-proxy callers.
 Env (in addition to yhk_printer / printer_service):
   API_HOST, API_PORT, API_TOKEN, DEFAULT_SUBREDDIT
   MAX_TEXT_CHARS, MAX_MARKDOWN_CHARS, MAX_UPLOAD_BYTES, MAX_IMAGE_PIXELS
-  MAX_RENDER_HEIGHT
+  MAX_RENDER_HEIGHT, MAX_PRINT_QUEUE
 
-Auth (only if API_TOKEN is set): send header
-  X-Api-Key: <token>
-  or Authorization: Bearer <token>
-NFC / HA: same header on /print/* and /printer/wake. /health, /ready, /status stay open.
+Print routes validate/prepare then enqueue (HTTP 202). Printer offline does not
+fail the request — the worker retries. Callers stay dumb: accepted or rejected.
+
+Auth (only if API_TOKEN is set): X-Api-Key or Authorization: Bearer.
+NFC / HA: same on /print/* and /printer/wake. /health, /ready, /status stay open.
 """
 from __future__ import annotations
 
@@ -39,7 +40,7 @@ from pydantic import BaseModel, Field
 from image_prep import prepare_raster_image
 from markdown_renderer import RenderTooTall, render_markdown
 import printer_service
-from printer_service import PrintFailed, PrinterUnavailable
+from print_queue import QueueFull, print_queue
 from reddit_image import RedditImageError, fetch_random_subreddit_image
 from yhk_printer import create_text_image, get_config
 
@@ -107,14 +108,18 @@ def _compose_captioned_image(
 async def lifespan(_app: FastAPI):
     cfg = get_config()
     token_on = bool(_api_token())
+    print_queue.start()
     log.info(
-        "event=startup printer_mac=%s printer_port=%s auth=%s default_subreddit=%s",
+        "event=startup printer_mac=%s printer_port=%s auth=%s default_subreddit=%s "
+        "queue_max=%s",
         cfg["mac"],
         cfg["port"],
         "on" if token_on else "off",
         _default_subreddit(),
+        print_queue.maxsize,
     )
     yield
+    print_queue.stop()
 
 
 app = FastAPI(title="Cat Printer", version="1.0.0", lifespan=lifespan)
@@ -137,16 +142,25 @@ def _path_requires_auth(path: str) -> bool:
     return path.startswith("/print") or path == "/printer/wake"
 
 
-def _print_or_http(job: str, req_id: str, img) -> None:
+def _enqueue_or_http(
+    kind: str,
+    req_id: str,
+    img: PIL.Image.Image,
+    **extra,
+) -> JSONResponse:
+    """Accept a prepared raster into the queue. Printer offline is not a reject."""
     try:
-        printer_service.print_raster(job, req_id, img)
-    except PrinterUnavailable as e:
-        raise HTTPException(
-            status_code=502, detail=f"Printer connection failed: {e}"
-        ) from e
-    except PrintFailed as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
-
+        job_id = print_queue.submit(kind=kind, req_id=req_id, image=img, meta=extra)
+    except QueueFull as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    body = {
+        "ok": True,
+        "queued": True,
+        "job_id": job_id,
+        "printed": kind,
+        **extra,
+    }
+    return JSONResponse(status_code=202, content=body)
 
 @app.middleware("http")
 async def auth_and_request_log(request: Request, call_next):
@@ -197,6 +211,7 @@ def health():
         "printer_port": cfg["port"],
         "auth_required": bool(_api_token()),
         "default_subreddit": _default_subreddit(),
+        **print_queue.stats(),
     }
 
 
@@ -250,8 +265,7 @@ def print_text_endpoint(request: Request, body: TextPrintRequest):
         ).convert("1")
     except ValueError as e:
         raise HTTPException(status_code=413, detail=str(e)) from e
-    _print_or_http("text", req_id, img)
-    return {"ok": True, "printed": "text"}
+    return _enqueue_or_http("text", req_id, img)
 
 
 @app.post("/print/markdown")
@@ -278,8 +292,7 @@ def print_markdown_endpoint(request: Request, body: MarkdownPrintRequest):
         log.error("event=render_fail job=markdown req_id=%s error=%s", req_id, e)
         raise HTTPException(status_code=500, detail=f"Markdown render failed: {e}") from e
 
-    _print_or_http("markdown", req_id, img)
-    return {"ok": True, "printed": "markdown"}
+    return _enqueue_or_http("markdown", req_id, img)
 
 
 @app.post("/print/image")
@@ -317,8 +330,7 @@ def print_image_endpoint(request: Request, file: UploadFile = File(...)):
         h,
     )
     prepared = prepare_raster_image(img, cfg["width"]).convert("1")
-    _print_or_http("image", req_id, prepared)
-    return {"ok": True, "printed": "image", "filename": file.filename}
+    return _enqueue_or_http("image", req_id, prepared, filename=file.filename)
 
 
 @app.post("/print/reddit")
@@ -359,8 +371,6 @@ def print_reddit_endpoint(
                 f"max {MAX_RENDER_HEIGHT}px)"
             ),
         )
-    _print_or_http("reddit", req_id, prepared)
-
     title = post.get("title", "")
     url = post.get("url", "")
     log.info(
@@ -370,13 +380,14 @@ def print_reddit_endpoint(
         title[:80],
         url,
     )
-    return {
-        "ok": True,
-        "printed": "reddit",
-        "subreddit": sub.lstrip("r/").strip("/"),
-        "title": title,
-        "url": url,
-    }
+    return _enqueue_or_http(
+        "reddit",
+        req_id,
+        prepared,
+        subreddit=sub.lstrip("r/").strip("/"),
+        title=title,
+        url=url,
+    )
 
 
 def main():
