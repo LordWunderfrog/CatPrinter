@@ -14,7 +14,7 @@ Printer MAC: `25:00:27:00:1B:D5`. API on HA host `:8080`. Default subreddit: `wu
 
 Recent commits:
 
-- (pending) 1.1.22 — per-subreddit reddit image disk cache (claim/delete)
+- `66e6cab` — per-subreddit reddit image disk cache (claim/delete)
 - `1dac511` — probe.log; remove `/print/text`; pin deps; SSRF on image fetches
 - `5495864` — quieter, non-duplicated logs; `queued`/`printed` correlated by req+job
 - `15b5295` — listing batches of 20; retry random `before` window if no stills
@@ -78,7 +78,7 @@ Then read `S:\cat_printer_addon.log` / `\\home.lan\config\cat_printer_addon.log`
 
 Optional local layout: gitignored `.ha/` symlinks to UNC shares (see below). `.ha` is already in `.gitignore`.
 
-### Reddit image cache (1.1.22)
+## Reddit image cache (1.1.22)
 
 Per-sub folder under `/data/reddit_cache/{sub}/` (env `REDDIT_CACHE_DIR`). Flow:
 
@@ -87,6 +87,8 @@ Per-sub folder under `/data/reddit_cache/{sub}/` (env `REDDIT_CACHE_DIR`). Flow:
 3. Next taps hit cache until empty (`event=reddit_cache_hit remaining=N`); never crosses subs
 
 Disable with `REDDIT_CACHE_ENABLED=0`.
+
+## Sleep findings (Phase A — 2026-08-07)
 
 Evidence from pre-1.1.21 `addon.log` (when awake probes were still INFO):
 
