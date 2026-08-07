@@ -55,7 +55,7 @@ def test_read_capped_rejects_fat_cat():
 def test_list_prefers_arctic_over_pullpush(monkeypatch):
     calls: list[str] = []
 
-    def arctic(sub, limit):
+    def arctic(sub, limit, *, before=None):
         calls.append("arctic")
         return [
             {
@@ -69,7 +69,7 @@ def test_list_prefers_arctic_over_pullpush(monkeypatch):
         calls.append("rss")
         return [{"title": "rss", "url": "https://i.redd.it/r.jpg", "permalink": ""}]
 
-    def pullpush(sub, limit):
+    def pullpush(sub, limit, *, before=None):
         calls.append("pullpush")
         return [{"title": "nope", "url": "https://i.redd.it/y.jpg", "permalink": ""}]
 
@@ -83,13 +83,13 @@ def test_list_prefers_arctic_over_pullpush(monkeypatch):
 
 
 def test_list_falls_back_to_rss_then_pullpush(monkeypatch):
-    def arctic(sub, limit):
+    def arctic(sub, limit, *, before=None):
         raise RedditImageError("Arctic Shift listing failed for r/wunkus: boom")
 
     def rss(sub, limit):
         return [{"title": "rss", "url": "https://i.redd.it/z.png", "permalink": ""}]
 
-    def pullpush(sub, limit):
+    def pullpush(sub, limit, *, before=None):
         return [{"title": "fallback", "url": "https://i.redd.it/p.png", "permalink": ""}]
 
     monkeypatch.setattr("reddit_image._fetch_arctic_shift", arctic)
@@ -100,10 +100,36 @@ def test_list_falls_back_to_rss_then_pullpush(monkeypatch):
     assert posts[0]["title"] == "rss"
 
 
+def test_list_retries_empty_batch_then_succeeds(monkeypatch):
+    calls: list[int | None] = []
+
+    def arctic(sub, limit, *, before=None):
+        calls.append(before)
+        if before is None:
+            return []  # recent window all videos
+        return [{"title": "older", "url": "https://i.redd.it/o.jpg", "permalink": ""}]
+
+    monkeypatch.setattr("reddit_image._fetch_arctic_shift", arctic)
+    monkeypatch.setattr(
+        "reddit_image._fetch_reddit_rss",
+        lambda *a, **k: (_ for _ in ()).throw(RedditImageError("skip")),
+    )
+    monkeypatch.setattr(
+        "reddit_image._fetch_pullpush",
+        lambda *a, **k: (_ for _ in ()).throw(RedditImageError("skip")),
+    )
+    monkeypatch.setattr("reddit_image._listing_cache", {})
+    monkeypatch.setattr("reddit_image.LISTING_BATCH_ATTEMPTS", 3)
+    posts = list_hot_image_posts("wunkus", limit=20)
+    assert posts[0]["title"] == "older"
+    assert calls[0] is None
+    assert any(c is not None for c in calls[1:])
+
+
 def test_list_uses_cache(monkeypatch):
     calls = {"n": 0}
 
-    def arctic(sub, limit):
+    def arctic(sub, limit, *, before=None):
         calls["n"] += 1
         return [{"title": "cached", "url": "https://i.redd.it/c.jpg", "permalink": ""}]
 
@@ -125,6 +151,7 @@ def test_list_uses_cache(monkeypatch):
 
 def test_list_both_fail(monkeypatch):
     monkeypatch.setattr("reddit_image._listing_cache", {})
+    monkeypatch.setattr("reddit_image.LISTING_BATCH_ATTEMPTS", 2)
     monkeypatch.setattr(
         "reddit_image._fetch_arctic_shift",
         lambda *a, **k: (_ for _ in ()).throw(RedditImageError("arctic down")),
@@ -166,3 +193,11 @@ def test_rss_parses_embedded_images(monkeypatch):
     posts = _fetch_reddit_rss("wunkus", 10)
     assert len(posts) == 1
     assert posts[0]["url"].endswith(".jpeg")
+
+
+def test_clamp_batch_size():
+    from reddit_image import _clamp_batch_size
+
+    assert _clamp_batch_size(20) == 20
+    assert _clamp_batch_size(100) == 50
+    assert _clamp_batch_size(0) == 1

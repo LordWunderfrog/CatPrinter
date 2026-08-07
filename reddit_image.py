@@ -2,9 +2,10 @@
 Pick a random direct-image post from a subreddit.
 
 Listing order: Arctic Shift → Reddit RSS → Pullpush.
+Small batches (default 20). If a batch has no usable stills, draw another
+random time window and try again — do not pull 100-post dumps.
 Reddit hot.json is 403 for non-browser clients. Arctic's `url=` filter times
-out (422); we list recent posts and filter direct images client-side.
-GIFs skipped (thermal). Retry dead CDN links on download.
+out (422); filter direct images client-side. GIFs skipped (thermal).
 """
 from __future__ import annotations
 
@@ -45,6 +46,9 @@ ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 DEFAULT_MAX_IMAGE_BYTES = 15 * 1024 * 1024
 DEFAULT_MAX_LISTING_BYTES = 2 * 1024 * 1024
 LISTING_CACHE_TTL_S = float(os.environ.get("REDDIT_LISTING_CACHE_TTL_S", "300"))
+LISTING_BATCH_SIZE = int(os.environ.get("REDDIT_LISTING_BATCH_SIZE", "20"))
+LISTING_BATCH_ATTEMPTS = int(os.environ.get("REDDIT_LISTING_BATCH_ATTEMPTS", "5"))
+LISTING_LOOKBACK_DAYS = int(os.environ.get("REDDIT_LISTING_LOOKBACK_DAYS", "365"))
 
 _listing_cache: dict[str, tuple[float, list[dict[str, str]]]] = {}
 
@@ -149,17 +153,34 @@ def _rows_from_listing_payload(data: Any, *, source: str, sub: str) -> list[Any]
     return rows
 
 
-def _fetch_arctic_shift(sub: str, limit: int) -> list[dict[str, str]]:
+def _clamp_batch_size(limit: int | None) -> int:
+    raw = LISTING_BATCH_SIZE if limit is None else int(limit)
+    return max(1, min(raw, 50))
+
+
+def _random_before_utc() -> int:
+    """Unix seconds somewhere in the lookback window (exclusive of 'now')."""
+    now = int(time.time())
+    window = max(86400, LISTING_LOOKBACK_DAYS * 86400)
+    return now - random.randint(3600, window)
+
+
+def _fetch_arctic_shift(
+    sub: str,
+    limit: int,
+    *,
+    before: int | None = None,
+) -> list[dict[str, str]]:
     # Do NOT pass url= — Arctic returns 422 "Timeout. Maybe slow down a bit".
-    qs = urllib.parse.urlencode(
-        {
-            "subreddit": sub,
-            "limit": limit,
-            "sort_type": "created_utc",
-            "sort": "desc",
-        }
-    )
-    endpoint = f"{ARCTIC_SHIFT_BASE}?{qs}"
+    params: dict[str, Any] = {
+        "subreddit": sub,
+        "limit": limit,
+        "sort_type": "created_utc",
+        "sort": "desc",
+    }
+    if before is not None:
+        params["before"] = before
+    endpoint = f"{ARCTIC_SHIFT_BASE}?{urllib.parse.urlencode(params)}"
     try:
         text = _http_get_text(
             endpoint,
@@ -211,9 +232,16 @@ def _fetch_reddit_rss(sub: str, limit: int) -> list[dict[str, str]]:
     return posts
 
 
-def _fetch_pullpush(sub: str, limit: int) -> list[dict[str, str]]:
-    qs = urllib.parse.urlencode({"subreddit": sub, "size": limit})
-    endpoint = f"{PULLPUSH_BASE}?{qs}"
+def _fetch_pullpush(
+    sub: str,
+    limit: int,
+    *,
+    before: int | None = None,
+) -> list[dict[str, str]]:
+    params: dict[str, Any] = {"subreddit": sub, "size": limit}
+    if before is not None:
+        params["before"] = before
+    endpoint = f"{PULLPUSH_BASE}?{urllib.parse.urlencode(params)}"
     try:
         text = _http_get_text(
             endpoint,
@@ -247,10 +275,67 @@ def _cache_put(sub: str, posts: list[dict[str, str]]) -> None:
     _listing_cache[sub] = (time.monotonic() + LISTING_CACHE_TTL_S, list(posts))
 
 
-def list_hot_image_posts(subreddit: str, limit: int = 100) -> list[dict[str, str]]:
-    """Return [{title, url}, ...] with direct image URLs."""
+def _batches_with_images(
+    name: str,
+    sub: str,
+    batch_size: int,
+    fetch: Callable[..., list[dict[str, str]]],
+    *,
+    supports_before: bool,
+) -> list[dict[str, str]]:
+    """
+    Pull small batches until at least one direct image appears.
+    First try = newest; later tries = random `before` window when supported.
+    """
+    attempts = max(1, LISTING_BATCH_ATTEMPTS if supports_before else 1)
+    last_err: RedditImageError | None = None
+    for attempt in range(attempts):
+        before = None if attempt == 0 or not supports_before else _random_before_utc()
+        try:
+            if supports_before:
+                posts = fetch(sub, batch_size, before=before)
+            else:
+                posts = fetch(sub, batch_size)
+        except RedditImageError as e:
+            last_err = e
+            log.warning(
+                "event=listing_batch_fail source=%s subreddit=%s attempt=%s before=%s error=%s",
+                name,
+                sub,
+                attempt + 1,
+                before,
+                e,
+            )
+            continue
+        if posts:
+            log.info(
+                "event=listing_ok source=%s subreddit=%s posts=%s attempt=%s before=%s",
+                name,
+                sub,
+                len(posts),
+                attempt + 1,
+                before,
+            )
+            return posts
+        log.info(
+            "event=listing_batch_empty source=%s subreddit=%s attempt=%s before=%s",
+            name,
+            sub,
+            attempt + 1,
+            before,
+        )
+    if last_err is not None:
+        raise last_err
+    return []
+
+
+def list_hot_image_posts(
+    subreddit: str,
+    limit: int | None = None,
+) -> list[dict[str, str]]:
+    """Return [{title, url}, ...] with direct image URLs (small batched fetches)."""
     sub = _normalize_subreddit(subreddit)
-    limit = max(1, min(int(limit), 100))
+    batch_size = _clamp_batch_size(limit)
 
     cached = _cache_get(sub)
     if cached:
@@ -259,18 +344,24 @@ def list_hot_image_posts(subreddit: str, limit: int = 100) -> list[dict[str, str
             sub,
             len(cached),
         )
-        return cached[:limit]
+        return cached[:batch_size]
 
     errors: list[str] = []
-    sources: list[tuple[str, Callable[[str, int], list[dict[str, str]]]]] = [
-        ("arctic_shift", _fetch_arctic_shift),
-        ("reddit_rss", _fetch_reddit_rss),
-        ("pullpush", _fetch_pullpush),
+    sources: list[tuple[str, Callable[..., list[dict[str, str]]], bool]] = [
+        ("arctic_shift", _fetch_arctic_shift, True),
+        ("reddit_rss", _fetch_reddit_rss, False),
+        ("pullpush", _fetch_pullpush, True),
     ]
 
-    for name, fetch in sources:
+    for name, fetch, supports_before in sources:
         try:
-            posts = fetch(sub, limit)
+            posts = _batches_with_images(
+                name,
+                sub,
+                batch_size,
+                fetch,
+                supports_before=supports_before,
+            )
         except RedditImageError as e:
             errors.append(str(e))
             log.warning(
@@ -279,14 +370,8 @@ def list_hot_image_posts(subreddit: str, limit: int = 100) -> list[dict[str, str
             continue
         if posts:
             _cache_put(sub, posts)
-            log.info(
-                "event=listing_ok source=%s subreddit=%s posts=%s",
-                name,
-                sub,
-                len(posts),
-            )
             return posts
-        errors.append(f"{name}: empty image list for r/{sub}")
+        errors.append(f"{name}: no usable images in {LISTING_BATCH_ATTEMPTS} batch(es)")
 
     detail = "; ".join(errors) if errors else "no sources tried"
     raise RedditImageError(f"No direct image posts found for r/{sub} ({detail})")
@@ -294,7 +379,7 @@ def list_hot_image_posts(subreddit: str, limit: int = 100) -> list[dict[str, str
 
 def pick_random_image_post(
     subreddit: str = "wunkus",
-    limit: int = 100,
+    limit: int | None = None,
 ) -> dict[str, str]:
     posts = list_hot_image_posts(subreddit, limit=limit)
     return random.choice(posts)
@@ -302,7 +387,7 @@ def pick_random_image_post(
 
 def fetch_random_subreddit_image(
     subreddit: str = "wunkus",
-    limit: int = 100,
+    limit: int | None = None,
     attempts: int = 8,
     max_bytes: int = DEFAULT_MAX_IMAGE_BYTES,
     max_pixels: int | None = None,
