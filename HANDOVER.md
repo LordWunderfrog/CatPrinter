@@ -10,10 +10,11 @@ Printer MAC: `25:00:27:00:1B:D5`. API on HA host `:8080`. Default subreddit: `wu
 
 ## Current shipped version
 
-**1.1.15** (`ha-addon/config.yaml`). On share as of last deploy. Confirm in HA: **Settings → Apps → Cat Printer**.
+**1.1.16** (`ha-addon/config.yaml`). On share after deploy + Rebuild. Confirm in HA: **Settings → Apps → Cat Printer**.
 
-Recent commits (paper / queue hardening):
+Recent commits (paper / queue hardening + Samba logs):
 
+- (pending) 1.1.16 — rotating app log on `/share/cat_printer/addon.log` (`share:rw`)
 - `4fb3b49` — hold print lock for whole drain; no wake-retry reprint after partial send; settle after failed sends; conservative settle (5s floor, 25 px/s)
 - `6d4ef50` — settle under print lock (status was RFCOMM mid-feed)
 - Earlier: re-list drain until empty; EBUSY = settle-retry not sleepy; HA NFC `mode: queued`
@@ -47,7 +48,14 @@ Cursor rule: `.cursor/rules/ha-addon-deploy.mdc`. Checkpoint rule: commit/push a
 
 ## Logs (important)
 
-Add-on stdout is **not** a Samba file by default. Dump from SSH/Terminal on HA:
+Live app log (preferred — no dump step):
+
+`\\home.lan\share\cat_printer\addon.log`  
+(or `.ha\share\cat_printer\addon.log` if you linked share — see workspace tip)
+
+Rotating file from the add-on (`LOG_FILE`, map `share:rw`). Agent can read this anytime over Samba.
+
+Add-on stdout is **also** in Supervisor/journal. Optional dump from SSH/Terminal on HA:
 
 ```bash
 ha apps logs local_cat_printer > /config/cat_printer_addon.log
@@ -69,7 +77,7 @@ Optional local layout: gitignored `.ha/` symlinks to UNC shares (see below). `.h
 3. Drain released lock between jobs → probe/ESC@ could abort feed
 4. Drain one-shot file list left queued jobs behind
 
-**Not yet validated** on hardware under 1.1.15 with a successful multi-tap. Last useful log dump had no successful `spool_*` sequence.
+**Not yet validated** on hardware under 1.1.15+ with a successful multi-tap. Last useful log dump had no successful `spool_*` sequence.
 
 ### Pass criteria (physical + logs)
 
@@ -86,9 +94,9 @@ If still smashed: lower `SPOOL_PX_PER_SEC` (env, default 25). Do **not** “fix�
 
 ### How to re-test
 
-1. Confirm app version **1.1.15** (rebuild if needed)
+1. Confirm app version **1.1.16** (rebuild if needed)
 2. Printer awake; double/triple NFC tap
-3. Refresh log dump to `S:\cat_printer_addon.log`
+3. Read live log: `\\home.lan\share\cat_printer\addon.log` (or `.ha\share\...`)
 4. Read logs before burning more labels
 
 ## HA package notes
@@ -111,6 +119,7 @@ Multi-root `.code-workspace` with `N:`/`S:` breaks Agents (cwd becomes `workspac
 New-Item -ItemType Directory -Force -Path .ha | Out-Null
 cmd /c mklink /D ".ha\local_apps" "\\home.lan\local_apps\cat_printer"
 cmd /c mklink /D ".ha\config" "\\home.lan\config"
+cmd /c mklink /D ".ha\share" "\\home.lan\share"
 ```
 
 ## Tests

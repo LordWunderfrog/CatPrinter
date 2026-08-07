@@ -11,6 +11,7 @@ Env (in addition to yhk_printer / printer_service):
   API_HOST, API_PORT, API_TOKEN, DEFAULT_SUBREDDIT
   MAX_TEXT_CHARS, MAX_MARKDOWN_CHARS, MAX_UPLOAD_BYTES, MAX_IMAGE_PIXELS
   MAX_RENDER_HEIGHT, MAX_PRINT_QUEUE, PRINT_SPOOL_DIR, SPOOL_TTL_S
+  LOG_FILE — rotating file log (add-on default: /share/cat_printer/addon.log)
 
 Print routes write a raster to the disk spool and return 202. Drain runs
 opportunistically (after enqueue if awake, after wake/status when awake) —
@@ -36,17 +37,17 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from image_prep import prepare_raster_image
+from log_setup import configure_logging
 from markdown_renderer import RenderTooTall, render_markdown
 import printer_service
 from print_spool import QueueFull, print_spool
 from reddit_image import RedditImageError, fetch_random_subreddit_image
 from yhk_printer import create_text_image, get_config
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-)
+_log_file = configure_logging()
 log = logging.getLogger("cat_printer.api")
+if _log_file:
+    log.info("event=log_file path=%s", _log_file)
 
 # Crash-level ceilings only — normal receipts/photos sail under these.
 MAX_TEXT_CHARS = int(os.environ.get("MAX_TEXT_CHARS", str(50_000)))
