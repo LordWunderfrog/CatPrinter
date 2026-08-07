@@ -14,7 +14,7 @@ Printer MAC: `25:00:27:00:1B:D5`. API on HA host `:8080`. Default subreddit: `wu
 
 Recent commits:
 
-- (pending) 1.1.19 — listing batches of 20; retry random `before` window if no stills
+- `15b5295` — listing batches of 20; retry random `before` window if no stills
 - `9a709e8` — Arctic without `url=` (was 422 timeout); RSS fallback; listing cache
 - `24927ea` — Arctic Shift listing (Pullpush fallback); Pullpush alone was 502
 - `4196d3e` — rotating app log on `/share/cat_printer/addon.log` (`share:rw`)
