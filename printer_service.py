@@ -11,7 +11,8 @@ import os
 import subprocess
 import threading
 import time
-from typing import Callable
+from contextlib import contextmanager
+from typing import Callable, Iterator
 
 from yhk_printer import (
     get_config,
@@ -23,7 +24,9 @@ from yhk_printer import (
 
 log = logging.getLogger("cat_printer.service")
 
-_print_lock = threading.Lock()
+# RLock: drain holds it for the whole queue pass; print_raster re-enters for each job.
+# Probes/wake must not open RFCOMM between jobs or during mech settle.
+_print_lock = threading.RLock()
 
 # After bluetoothctl connect, brief pause before RFCOMM (Classic stack settle).
 WAKE_BT_SETTLE_S = float(os.environ.get("WAKE_BT_SETTLE_S", "1.0"))
@@ -49,6 +52,13 @@ class PrinterUnavailable(PrinterError):
 
 class PrintFailed(PrinterError):
     """Connected but the print job failed."""
+
+
+@contextmanager
+def hold_printer() -> Iterator[None]:
+    """Exclusive printer ownership (drain uses this around the whole queue)."""
+    with _print_lock:
+        yield
 
 
 def bluetoothctl_nudge(mac: str | None = None) -> str | None:
@@ -171,62 +181,81 @@ def run_print(
       1. Open session (connect micro-retries inside yhk_printer.connect)
       2. Run job
       3. On EBUSY: settle and retry (adapter catching up after prior job)
-      4. On sleepy/host-down: one bluetoothctl nudge + one more session
-      5. Hold the lock for settle_s so status/wake cannot RFCOMM mid-feed
+      4. On sleepy/host-down before any send: one bluetoothctl nudge + one more session
+      5. Never wake-retry after bytes may have been sent (would reprint / smash paper)
+      6. Hold the lock for settle_s after any send attempt so probes cannot RFCOMM mid-feed
 
     Raises PrinterUnavailable / PrintFailed. Never raises HTTPException.
     """
     cfg = get_config()
     with _print_lock:
+        started = False
+
+        def tracking_fn(soc) -> None:
+            nonlocal started
+            started = True
+            fn(soc)
+
         try:
-            _run_session_settled(job, req_id, fn)
-        except OSError as first:
-            if is_busy_error(first):
-                # Settled retries already exhausted inside _run_session_settled.
-                log.error(
-                    "event=print_fail job=%s req_id=%s error=%s", job, req_id, first
-                )
-                raise PrinterUnavailable(str(first)) from first
-            if not is_retryable_connect_error(first):
-                log.error(
-                    "event=print_fail job=%s req_id=%s error=%s", job, req_id, first
-                )
-                raise PrinterUnavailable(str(first)) from first
-            log.warning(
-                "event=print_wake_retry job=%s req_id=%s error=%s",
-                job,
-                req_id,
-                first,
-            )
-            bluetoothctl_nudge(cfg["mac"])
             try:
-                _run_session_settled(job, req_id, fn)
-            except OSError as second:
-                log.error(
-                    "event=print_fail job=%s req_id=%s error=%s after_wake=1",
+                _run_session_settled(job, req_id, tracking_fn)
+            except OSError as first:
+                if started:
+                    log.error(
+                        "event=print_fail job=%s req_id=%s error=%s partial_send=1",
+                        job,
+                        req_id,
+                        first,
+                    )
+                    raise PrintFailed(str(first)) from first
+                if is_busy_error(first):
+                    log.error(
+                        "event=print_fail job=%s req_id=%s error=%s", job, req_id, first
+                    )
+                    raise PrinterUnavailable(str(first)) from first
+                if not is_retryable_connect_error(first):
+                    log.error(
+                        "event=print_fail job=%s req_id=%s error=%s", job, req_id, first
+                    )
+                    raise PrinterUnavailable(str(first)) from first
+                log.warning(
+                    "event=print_wake_retry job=%s req_id=%s error=%s",
                     job,
                     req_id,
-                    second,
+                    first,
                 )
-                raise PrinterUnavailable(str(second)) from second
+                bluetoothctl_nudge(cfg["mac"])
+                try:
+                    _run_session_settled(job, req_id, tracking_fn)
+                except OSError as second:
+                    log.error(
+                        "event=print_fail job=%s req_id=%s error=%s after_wake=1",
+                        job,
+                        req_id,
+                        second,
+                    )
+                    raise PrinterUnavailable(str(second)) from second
+                except PrinterError:
+                    raise
+                except Exception as e:
+                    log.error(
+                        "event=print_fail job=%s req_id=%s error=%s", job, req_id, e
+                    )
+                    raise PrintFailed(str(e)) from e
             except PrinterError:
                 raise
             except Exception as e:
                 log.error("event=print_fail job=%s req_id=%s error=%s", job, req_id, e)
                 raise PrintFailed(str(e)) from e
-        except PrinterError:
-            raise
-        except Exception as e:
-            log.error("event=print_fail job=%s req_id=%s error=%s", job, req_id, e)
-            raise PrintFailed(str(e)) from e
-        if settle_s > 0:
-            log.info(
-                "event=print_mech_settle job=%s req_id=%s settle_s=%s",
-                job,
-                req_id,
-                round(settle_s, 1),
-            )
-            time.sleep(settle_s)
+        finally:
+            if settle_s > 0 and started:
+                log.info(
+                    "event=print_mech_settle job=%s req_id=%s settle_s=%s",
+                    job,
+                    req_id,
+                    round(settle_s, 1),
+                )
+                time.sleep(settle_s)
     log.info("event=print_ok job=%s req_id=%s", job, req_id)
 
 

@@ -186,6 +186,18 @@ def create_text_image(text, width, font_path="Lucon.ttf", font_size=12, max_heig
     return _trim_image(img)
 
 
+def estimate_print_height(im, width=None) -> int:
+    """
+    Height of the raster that print_image will send (after fit-to-width).
+    Use for mechanical settle estimates — raw PIL height can disagree after resize.
+    """
+    cfg = get_config()
+    width = width if width is not None else cfg["width"]
+    if im.width > width:
+        return max(1, int(im.height * (width / im.width)))
+    return max(1, im.height)
+
+
 def print_image(soc, im, width=None):
     """
     Send a PIL Image to the printer over the open socket.

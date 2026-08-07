@@ -17,7 +17,8 @@ from typing import Any
 
 import PIL.Image
 
-from printer_service import PrintFailed, PrinterUnavailable, print_raster
+from printer_service import PrintFailed, PrinterUnavailable, hold_printer, print_raster
+from yhk_printer import estimate_print_height
 
 log = logging.getLogger("cat_printer.spool")
 
@@ -27,9 +28,9 @@ SPOOL_TTL_S = float(os.environ.get("SPOOL_TTL_S", str(7 * 24 * 3600)))
 SPOOL_RETRY_S = float(os.environ.get("SPOOL_RETRY_S", "120"))
 # After RFCOMM "done", wait for the mechanism to finish feeding before the next job.
 # Bias long: smashed pages waste more paper than a boring gap.
-# settle_s = max(SPOOL_INTER_JOB_GAP_S, image_height / SPOOL_PX_PER_SEC)
-SPOOL_INTER_JOB_GAP_S = float(os.environ.get("SPOOL_INTER_JOB_GAP_S", "4.0"))
-SPOOL_PX_PER_SEC = float(os.environ.get("SPOOL_PX_PER_SEC", "30"))
+# settle_s = max(SPOOL_INTER_JOB_GAP_S, print_height / SPOOL_PX_PER_SEC)
+SPOOL_INTER_JOB_GAP_S = float(os.environ.get("SPOOL_INTER_JOB_GAP_S", "5.0"))
+SPOOL_PX_PER_SEC = float(os.environ.get("SPOOL_PX_PER_SEC", "25"))
 QUEUE_PRINT_FAIL_LIMIT = int(os.environ.get("QUEUE_PRINT_FAIL_LIMIT", "3"))
 
 
@@ -150,90 +151,95 @@ class PrintSpool:
         drained = 0
         stopped = None
         try:
-            self._expire_old()
-            while True:
-                paths = self._pending_json_paths()
-                if not paths:
-                    break
-                json_path = paths[0]
-                job_id = json_path.stem
-                png_path = self.root / f"{job_id}.png"
-                try:
-                    payload = json.loads(json_path.read_text(encoding="utf-8"))
-                except Exception as e:
-                    log.error("event=spool_bad_meta job_id=%s error=%s", job_id, e)
-                    self._drop(job_id)
-                    continue
-                if not png_path.is_file():
-                    log.error("event=spool_missing_png job_id=%s", job_id)
-                    self._drop(job_id)
-                    continue
-                try:
-                    img = PIL.Image.open(png_path)
-                    img.load()
-                    img = img.convert("1")
-                except Exception as e:
-                    log.error("event=spool_bad_png job_id=%s error=%s", job_id, e)
-                    self._drop(job_id)
-                    continue
-
-                kind = payload.get("kind") or "spool"
-                req_id = payload.get("req_id") or "-"
-                settle = _mech_settle_s(img.height)
-                try:
-                    # Settle is inside print_raster under the print lock so
-                    # /status and /printer/wake cannot RFCOMM mid-feed.
-                    print_raster(kind, req_id, img, settle_s=settle)
-                except PrinterUnavailable as e:
-                    log.info(
-                        "event=spool_park reason=%s job_id=%s detail=%s",
-                        reason,
-                        job_id,
-                        e,
-                    )
-                    stopped = "sleepy"
-                    self._arm_sleepy_retry()
-                    break
-                except PrintFailed as e:
-                    fails = int(payload.get("fail_count") or 0) + 1
-                    payload["fail_count"] = fails
-                    json_path.write_text(json.dumps(payload), encoding="utf-8")
-                    log.error(
-                        "event=spool_print_fail job_id=%s attempt=%s error=%s",
-                        job_id,
-                        fails,
-                        e,
-                    )
-                    if fails >= QUEUE_PRINT_FAIL_LIMIT:
-                        log.error(
-                            "event=spool_drop job_id=%s reason=print_failed", job_id
-                        )
+            # Hold the printer for the whole drain so /status cannot RFCOMM in the
+            # gap between job N settle and job N+1 connect (ESC @ would abort feed).
+            with hold_printer():
+                self._expire_old()
+                while True:
+                    paths = self._pending_json_paths()
+                    if not paths:
+                        break
+                    json_path = paths[0]
+                    job_id = json_path.stem
+                    png_path = self.root / f"{job_id}.png"
+                    try:
+                        payload = json.loads(json_path.read_text(encoding="utf-8"))
+                    except Exception as e:
+                        log.error("event=spool_bad_meta job_id=%s error=%s", job_id, e)
                         self._drop(job_id)
-                    stopped = "print_failed"
-                    break
-                except Exception as e:
-                    log.exception(
-                        "event=spool_print_crash job_id=%s error=%s", job_id, e
-                    )
-                    stopped = "crash"
-                    break
+                        continue
+                    if not png_path.is_file():
+                        log.error("event=spool_missing_png job_id=%s", job_id)
+                        self._drop(job_id)
+                        continue
+                    try:
+                        img = PIL.Image.open(png_path)
+                        img.load()
+                        img = img.convert("1")
+                    except Exception as e:
+                        log.error("event=spool_bad_png job_id=%s error=%s", job_id, e)
+                        self._drop(job_id)
+                        continue
 
-                waited = int(
-                    time.time() - float(payload.get("enqueued_at") or time.time())
-                )
-                log.info(
-                    "event=spool_print_ok job_id=%s kind=%s req_id=%s waited_s=%s "
-                    "reason=%s settle_s=%s height=%s",
-                    job_id,
-                    kind,
-                    req_id,
-                    waited,
-                    reason,
-                    round(settle, 1),
-                    img.height,
-                )
-                self._drop(job_id)
-                drained += 1
+                    kind = payload.get("kind") or "spool"
+                    req_id = payload.get("req_id") or "-"
+                    height = estimate_print_height(img)
+                    settle = _mech_settle_s(height)
+                    try:
+                        # Settle is inside print_raster (re-entrant lock) so probes
+                        # stay out for the full mech feed window.
+                        print_raster(kind, req_id, img, settle_s=settle)
+                    except PrinterUnavailable as e:
+                        log.info(
+                            "event=spool_park reason=%s job_id=%s detail=%s",
+                            reason,
+                            job_id,
+                            e,
+                        )
+                        stopped = "sleepy"
+                        self._arm_sleepy_retry()
+                        break
+                    except PrintFailed as e:
+                        fails = int(payload.get("fail_count") or 0) + 1
+                        payload["fail_count"] = fails
+                        json_path.write_text(json.dumps(payload), encoding="utf-8")
+                        log.error(
+                            "event=spool_print_fail job_id=%s attempt=%s error=%s",
+                            job_id,
+                            fails,
+                            e,
+                        )
+                        if fails >= QUEUE_PRINT_FAIL_LIMIT:
+                            log.error(
+                                "event=spool_drop job_id=%s reason=print_failed",
+                                job_id,
+                            )
+                            self._drop(job_id)
+                        stopped = "print_failed"
+                        break
+                    except Exception as e:
+                        log.exception(
+                            "event=spool_print_crash job_id=%s error=%s", job_id, e
+                        )
+                        stopped = "crash"
+                        break
+
+                    waited = int(
+                        time.time() - float(payload.get("enqueued_at") or time.time())
+                    )
+                    log.info(
+                        "event=spool_print_ok job_id=%s kind=%s req_id=%s waited_s=%s "
+                        "reason=%s settle_s=%s height=%s",
+                        job_id,
+                        kind,
+                        req_id,
+                        waited,
+                        reason,
+                        round(settle, 1),
+                        height,
+                    )
+                    self._drop(job_id)
+                    drained += 1
         finally:
             self._drain_lock.release()
 
