@@ -16,7 +16,7 @@ from reddit_image import (
 def test_normalize_subreddit():
     assert _normalize_subreddit("chonkers") == "chonkers"
     assert _normalize_subreddit("r/chonkers") == "chonkers"
-    assert _normalize_subreddit("/r/Aww/") == "Aww"
+    assert _normalize_subreddit("/r/Aww/") == "aww"
 
 
 def test_normalize_rejects_junk():

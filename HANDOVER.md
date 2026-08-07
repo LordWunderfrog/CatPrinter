@@ -10,7 +10,7 @@ Printer MAC: `25:00:27:00:1B:D5`. API on HA host `:8080`. Default subreddit: `wu
 
 ## Current shipped version
 
-**1.1.22** (`ha-addon/config.yaml`). On share after deploy + Rebuild/Update. Confirm in HA: **Settings → Apps → Cat Printer**.
+**1.1.23** (`ha-addon/config.yaml`). On share after deploy + Rebuild/Update. Confirm in HA: **Settings → Apps → Cat Printer**.
 
 Recent commits:
 
@@ -78,9 +78,9 @@ Then read `S:\cat_printer_addon.log` / `\\home.lan\config\cat_printer_addon.log`
 
 Optional local layout: gitignored `.ha/` symlinks to UNC shares (see below). `.ha` is already in `.gitignore`.
 
-## Reddit image cache (1.1.22)
+## Reddit image cache (1.1.22+)
 
-Per-sub folder under `/data/reddit_cache/{sub}/` (env `REDDIT_CACHE_DIR`). Flow:
+Per-sub folder under `/data/reddit_cache/{sub}/` (env `REDDIT_CACHE_DIR`). Folders are created on first use for any valid sub name — no allowlist. Flow:
 
 1. Claim cached still for that sub only → delete file → print
 2. On miss: list ~20 posts, download usable stills into that sub folder, claim one

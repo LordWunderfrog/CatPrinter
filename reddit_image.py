@@ -133,7 +133,8 @@ def _normalize_subreddit(name: str) -> str:
         name = name[2:].strip("/")
     if not name or not re.fullmatch(r"[A-Za-z0-9_]+", name):
         raise RedditImageError(f"Invalid subreddit name: {name!r}")
-    return name
+    # Reddit names are case-insensitive; lowercase keeps cache dirs / listing keys stable.
+    return name.lower()
 
 
 def _is_direct_image_url(url: str) -> bool:

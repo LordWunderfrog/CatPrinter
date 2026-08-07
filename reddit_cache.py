@@ -42,17 +42,22 @@ class RedditImageCache:
         self._locks: dict[str, threading.Lock] = {}
         self._locks_guard = threading.Lock()
 
+    def _sub_key(self, sub: str) -> str:
+        # Any valid sub name is fine — folders are created on first use, no allowlist.
+        return (sub or "").strip().lower()
+
     def _lock_for(self, sub: str) -> threading.Lock:
+        key = self._sub_key(sub)
         with self._locks_guard:
-            lock = self._locks.get(sub)
+            lock = self._locks.get(key)
             if lock is None:
                 lock = threading.Lock()
-                self._locks[sub] = lock
+                self._locks[key] = lock
             return lock
 
     def _sub_dir(self, sub: str) -> Path:
-        # sub already normalized ([A-Za-z0-9_]+)
-        path = self.root / sub.lower()
+        # Created on demand for every new subreddit (not limited to known names).
+        path = self.root / self._sub_key(sub)
         path.mkdir(parents=True, exist_ok=True)
         return path
 

@@ -53,6 +53,26 @@ def test_subs_are_isolated(cache: RedditImageCache):
     assert cache.count("chonkers") == 1
 
 
+def test_novel_sub_creates_folder(cache: RedditImageCache):
+    """First touch of an unseen sub must mkdir — no hardcoded sub list."""
+    sub = "rarepuppers"
+    sub_dir = cache.root / sub
+    assert not sub_dir.exists()
+    assert cache.claim(sub) is None
+    assert sub_dir.is_dir()
+    img = PIL.Image.new("RGB", (4, 4), (5, 5, 5))
+    assert cache.store_image(
+        "RarePuppers",  # case must collapse to same folder
+        img,
+        {"title": "p", "url": "https://i.redd.it/p.jpg", "permalink": ""},
+    )
+    assert (cache.root / "rarepuppers").is_dir()
+    assert cache.count("RAREPUPPERS") == 1
+    hit = cache.claim("rarepuppers")
+    assert hit is not None
+    assert hit[1]["title"] == "p"
+
+
 def test_dedupe_same_url(cache: RedditImageCache):
     img = PIL.Image.new("RGB", (4, 4), (0, 0, 0))
     post = {"title": "x", "url": "https://i.redd.it/x.jpg", "permalink": ""}
