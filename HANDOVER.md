@@ -10,10 +10,11 @@ Printer MAC: `25:00:27:00:1B:D5`. API on HA host `:8080`. Default subreddit: `wu
 
 ## Current shipped version
 
-**1.1.16** (`ha-addon/config.yaml`). On share after deploy + Rebuild. Confirm in HA: **Settings → Apps → Cat Printer**.
+**1.1.17** (`ha-addon/config.yaml`). On share after deploy + Rebuild/Update. Confirm in HA: **Settings → Apps → Cat Printer**.
 
-Recent commits (paper / queue hardening + Samba logs):
+Recent commits:
 
+- (pending) 1.1.17 — Arctic Shift listing (Pullpush fallback); Pullpush alone was 502
 - `4196d3e` — rotating app log on `/share/cat_printer/addon.log` (`share:rw`)
 - `4fb3b49` — hold print lock for whole drain; no wake-retry reprint after partial send; settle after failed sends; conservative settle (5s floor, 25 px/s)
 - `6d4ef50` — settle under print lock (status was RFCOMM mid-feed)

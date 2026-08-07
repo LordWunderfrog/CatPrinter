@@ -1,14 +1,16 @@
 """
 Pick a random direct-image post from a subreddit.
 
-Listing via Pullpush (Reddit's hot.json blocks non-browser API traffic).
+Listing: Arctic Shift first (reliable single-sub archive), Pullpush fallback.
+Reddit's own hot.json blocks non-browser clients (403). GIFs skipped (thermal).
 Image idea from SubGrabber.html: filter direct image URLs, pick at random,
-retry dead CDN links. GIFs skipped (thermal).
+retry dead CDN links.
 """
 from __future__ import annotations
 
 import io
 import json
+import logging
 import random
 import re
 import urllib.parse
@@ -17,6 +19,8 @@ from typing import Any
 
 import PIL.Image
 
+log = logging.getLogger("cat_printer.reddit")
+
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -24,6 +28,10 @@ USER_AGENT = (
 )
 IMAGE_URL_RE = re.compile(r"\.(jpe?g|png|webp)(?:\?|$)", re.I)
 SKIP_RE = re.compile(r"\.(gif|gifv|mp4|webm)(?:\?|$)", re.I)
+ARCTIC_SHIFT_BASE = "https://arctic-shift.photon-reddit.com/api/posts/search"
+PULLPUSH_BASE = "https://api.pullpush.io/reddit/search/submission/"
+# Prefix filter: arctic returns mostly videos otherwise; i.redd.it is our sweet spot.
+ARCTIC_IMAGE_URL_PREFIX = "https://i.redd.it/"
 
 
 class RedditImageError(Exception):
@@ -111,9 +119,42 @@ def _posts_from_listing_children(children: list[Any]) -> list[dict[str, str]]:
     return posts
 
 
+def _rows_from_listing_payload(data: Any, *, source: str, sub: str) -> list[Any]:
+    rows = data.get("data") if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        raise RedditImageError(f"Unexpected {source} payload for r/{sub}")
+    return rows
+
+
+def _fetch_arctic_shift(sub: str, limit: int) -> list[dict[str, str]]:
+    qs = urllib.parse.urlencode(
+        {
+            "subreddit": sub,
+            "limit": limit,
+            "url": ARCTIC_IMAGE_URL_PREFIX,
+            "sort_type": "created_utc",
+            "sort": "desc",
+        }
+    )
+    endpoint = f"{ARCTIC_SHIFT_BASE}?{qs}"
+    try:
+        text = _http_get_text(
+            endpoint,
+            _browser_headers(accept="application/json"),
+            timeout=30.0,
+        )
+        data = json.loads(text)
+    except Exception as e:
+        raise RedditImageError(f"Arctic Shift listing failed for r/{sub}: {e}") from e
+
+    return _posts_from_listing_children(
+        _rows_from_listing_payload(data, source="Arctic Shift", sub=sub)
+    )
+
+
 def _fetch_pullpush(sub: str, limit: int) -> list[dict[str, str]]:
     qs = urllib.parse.urlencode({"subreddit": sub, "size": limit})
-    endpoint = f"https://api.pullpush.io/reddit/search/submission/?{qs}"
+    endpoint = f"{PULLPUSH_BASE}?{qs}"
     try:
         text = _http_get_text(
             endpoint,
@@ -124,20 +165,39 @@ def _fetch_pullpush(sub: str, limit: int) -> list[dict[str, str]]:
     except Exception as e:
         raise RedditImageError(f"Pullpush listing failed for r/{sub}: {e}") from e
 
-    rows = data.get("data") if isinstance(data, dict) else data
-    if not isinstance(rows, list):
-        raise RedditImageError(f"Unexpected Pullpush payload for r/{sub}")
-    return _posts_from_listing_children(rows)
+    return _posts_from_listing_children(
+        _rows_from_listing_payload(data, source="Pullpush", sub=sub)
+    )
 
 
 def list_hot_image_posts(subreddit: str, limit: int = 100) -> list[dict[str, str]]:
-    """Return [{title, url}, ...] with direct image URLs (via Pullpush)."""
+    """Return [{title, url}, ...] with direct image URLs (Arctic Shift, Pullpush fallback)."""
     sub = _normalize_subreddit(subreddit)
     limit = max(1, min(int(limit), 100))
-    posts = _fetch_pullpush(sub, limit)
-    if posts:
-        return posts
-    raise RedditImageError(f"No direct image posts found for r/{sub}")
+    errors: list[str] = []
+
+    for name, fetch in (
+        ("arctic_shift", _fetch_arctic_shift),
+        ("pullpush", _fetch_pullpush),
+    ):
+        try:
+            posts = fetch(sub, limit)
+        except RedditImageError as e:
+            errors.append(str(e))
+            log.warning("event=listing_fail source=%s subreddit=%s error=%s", name, sub, e)
+            continue
+        if posts:
+            log.info(
+                "event=listing_ok source=%s subreddit=%s posts=%s",
+                name,
+                sub,
+                len(posts),
+            )
+            return posts
+        errors.append(f"{name}: empty image list for r/{sub}")
+
+    detail = "; ".join(errors) if errors else "no sources tried"
+    raise RedditImageError(f"No direct image posts found for r/{sub} ({detail})")
 
 
 def pick_random_image_post(
