@@ -1,0 +1,15 @@
+---
+description: Where Cat Printer documentation lives; prefer docs over inventing ops lore
+alwaysApply: true
+---
+
+# Documentation
+
+Canonical docs:
+
+- `README.md` — index
+- `AGENTS.md` — agent briefing
+- `docs/` — architecture, API, deploy, operations, reddit, markdown, parked work
+- `HANDOVER.md` / `MDSpec.md` — stubs that point at the above
+
+When changing behaviour, update the matching `docs/*.md` in the same change (or the same checkpoint). Parked keep-awake detail belongs only in `docs/PARKED.md`.

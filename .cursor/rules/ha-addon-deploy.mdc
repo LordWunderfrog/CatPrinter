@@ -1,31 +1,34 @@
 ---
 description: When and how to pack/deploy the HA Cat Printer add-on
-globs: api.py,yhk_printer.py,image_prep.py,reddit_image.py,markdown_renderer.py,requirements.txt,ha-addon/**,scripts/pack-addon.*
+globs: api.py,yhk_printer.py,printer_service.py,print_spool.py,image_prep.py,reddit_image.py,reddit_cache.py,markdown_renderer.py,net_guard.py,log_setup.py,requirements.txt,ha-addon/**,scripts/pack-addon.*
 alwaysApply: false
 ---
 
 # HA add-on deploy
 
-App code lives at repo root; `ha-addon/` is metadata only. HA runs a packed copy from `/addons/cat_printer`.
+Full write-up: `docs/DEPLOY.md`. Agent entry: `AGENTS.md`.
+
+App code lives at repo root; `ha-addon/` is metadata only. HA runs a packed copy from the local-apps / addons Samba folder.
 
 ## When to deploy
 
-- After changes that must run on the HA VM (API, printer lib, renderer, deps, `ha-addon/*`).
-- Not for Postman-only, docs-only, or local `python api.py` testing.
+- After changes that must run on the HA VM (API, printer lib, renderer, reddit, deps, `ha-addon/*`).
+- **Not** for docs-only, Postman-only, or local `python api.py` / pytest.
 
 ## How
 
-1. Bump `ha-addon/config.yaml` `version` when shipping a real change (HA rebuilds on version/file change).
+1. Bump `ha-addon/config.yaml` `version` when shipping a real runtime change (HA notices version/file change).
 2. Pack + sync:
    - Windows: `powershell -NoProfile -File scripts/pack-addon.ps1 -Deploy`
-   - Override path: `-DeployPath` or env `CAT_PRINTER_ADDON_DEPLOY` (default `\\home.lan\addons\cat_printer`)
-3. Tell the user to **Rebuild** Cat Printer in HA UI (Settings → Apps). Do not pretend rebuild is automatic. Samba path remains `/addons` unless HA renames the share.
+   - Override: `-DeployPath` or env `CAT_PRINTER_ADDON_DEPLOY`
+   - Default: `\\home.lan\addons\cat_printer` (same folder as `\\home.lan\local_apps\cat_printer`)
+3. Tell the user to **Rebuild** Cat Printer in HA (Settings → Apps). Rebuild is not automatic.
 4. Optional: sync `ha/cat_printer.yaml` to `\\home.lan\config\packages\` only when that package changed — separate from add-on pack.
-5. At a significant checkpoint (feature landed, deploy shipped, clear stop): commit and push to `origin` without waiting to be asked.
+5. At a significant checkpoint: commit and push to `origin` (see `git-checkpoints.mdc`).
 
 ## Auth note
 
-When `API_TOKEN` is set, `/print/*` **and** `/printer/wake` require the token. `/health`, `/ready`, `/status` stay open. HA package sends `X-Api-Key: !secret cat_printer_api_token` on wake/print rest_commands.
+When `API_TOKEN` is set, `/print/*` **and** `/printer/wake` require the token. `/health`, `/ready`, `/status` stay open. HA package sends `X-Api-Key: !secret cat_printer_api_token` on wake/print.
 
 ## Do not
 
