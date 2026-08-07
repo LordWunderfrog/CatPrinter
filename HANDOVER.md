@@ -71,18 +71,24 @@ Then read `S:\cat_printer_addon.log` / `\\home.lan\config\cat_printer_addon.log`
 
 Optional local layout: gitignored `.ha/` symlinks to UNC shares (see below). `.ha` is already in `.gitignore`.
 
-## Open problem — do not call “done” yet
+## Queue / settle — validated on hardware
 
-**Rapid NFC multi-tap smashed / cut off prints** (second job overlapping first on paper). Root causes found and patched in 1.1.13–1.1.15:
+**Multi-tap OK on 1.1.19** (2026-08-07): two NFC taps ~2s apart → depth 2 → sequential drain with settle gaps; no mid-page cutover.
 
-1. RFCOMM “done” ≠ mechanical feed done → height-based settle
-2. `/status` probed mid-settle (lock released too early)
-3. Drain released lock between jobs → probe/ESC@ could abort feed
-4. Drain one-shot file list left queued jobs behind
+Log excerpt (share `addon.log`):
 
-**Not yet validated** on hardware under 1.1.15+ with a successful multi-tap. Last useful log dump had no successful `spool_*` sequence.
+- `spool_enqueue … depth=1` then `depth=2` + `spool_drain_skip … already_draining`
+- `print_mech_settle … settle_s=23.1` / `16.1` (height 578 / 403)
+- `spool_print_ok` ×2 then `spool_drain_done … drained=2 stopped=empty depth=0`
+- During settle, status probes stay off the RFCOMM path as designed
 
-### Pass criteria (physical + logs)
+Printer is slow by nature; settle at ~25 px/s is intentionally conservative (prefer gap over smash).
+
+### If smash returns
+
+Physical: mid-page cutover or no gap. Then lower `SPOOL_PX_PER_SEC` (env, default 25). Do **not** “fix” with extra feed newlines — wastes label stock.
+
+### Pass criteria (still the checklist)
 
 Physical: full prints, clear gap, no mid-page cutover.
 
@@ -90,17 +96,17 @@ Logs should show:
 
 - `spool_print_ok … settle_s=… height=…`
 - `print_mech_settle … settle_s=…`
-- During drain: `probe printer=busy` (not `awake`)
+- During drain: `probe printer=busy` (not `awake`) when status is polled mid-job
 - `spool_drain_done … drained=N stopped=empty depth=0`
-
-If still smashed: lower `SPOOL_PX_PER_SEC` (env, default 25). Do **not** “fix” by dumping extra feed newlines — wastes expensive label stock.
 
 ### How to re-test
 
-1. Confirm app version **1.1.16** (rebuild if needed)
+1. Confirm app version (Rebuild/Update if needed)
 2. Printer awake; double/triple NFC tap
 3. Read live log: `\\home.lan\share\cat_printer\addon.log` (or `.ha\share\...`)
 4. Read logs before burning more labels
+
+Note: a tap that never reaches `/print/reddit` (HA REST/NFC miss) is not a queue bug — only `spool_enqueue` counts.
 
 ## HA package notes
 
