@@ -2,8 +2,8 @@
 Pick a random direct-image post from a subreddit.
 
 Listing order: Arctic Shift → Reddit RSS → Pullpush.
-Small batches (default 20). If a batch has no usable stills, draw another
-random time window and try again — do not pull 100-post dumps.
+Small batches (default 20). Usable stills land in a per-subreddit disk cache;
+each print claims and deletes one file. Never serves another sub's cache.
 Reddit hot.json is 403 for non-browser clients. Arctic's `url=` filter times
 out (422); filter direct images client-side. GIFs skipped (thermal).
 """
@@ -23,6 +23,8 @@ import xml.etree.ElementTree as ET
 from typing import Any, Callable
 
 import PIL.Image
+
+from reddit_cache import REDDIT_CACHE_ENABLED, reddit_image_cache
 
 log = logging.getLogger("cat_printer.reddit")
 
@@ -405,27 +407,81 @@ def fetch_random_subreddit_image(
     max_pixels: int | None = None,
 ) -> tuple[PIL.Image.Image, dict[str, str]]:
     """
-    Pick and download a random image. Retries on dead CDN links.
-    Returns (PIL image, post metadata).
+    Random printable still for a subreddit.
+
+    With disk cache (default on): claim a cached image for that sub only; on miss,
+    download a listing batch into the sub folder, then claim one (delete on claim).
     """
+    sub = _normalize_subreddit(subreddit)
+
+    def _check_pixels(img: PIL.Image.Image) -> PIL.Image.Image:
+        w, h = img.size
+        if max_pixels is not None and w * h > max_pixels:
+            raise RedditImageError(
+                f"Image too large ({w}x{h}; max {max_pixels} pixels)"
+            )
+        return img
+
+    if REDDIT_CACHE_ENABLED:
+        for _ in range(8):
+            hit = reddit_image_cache.claim(sub)
+            if hit is None:
+                break
+            img, post = hit
+            try:
+                return _check_pixels(img), post
+            except RedditImageError:
+                continue
+
     posts = list_hot_image_posts(subreddit, limit=limit)
     random.shuffle(posts)
     last_err: Exception | None = None
-    for post in posts[: max(1, attempts)]:
+    stored = 0
+    direct: tuple[PIL.Image.Image, dict[str, str]] | None = None
+
+    for post in posts:
         try:
             raw = _http_get_bytes(post["url"], max_bytes=max_bytes)
             img = PIL.Image.open(io.BytesIO(raw))
             img.load()
-            w, h = img.size
-            if max_pixels is not None and w * h > max_pixels:
-                raise RedditImageError(
-                    f"Image too large ({w}x{h}; max {max_pixels} pixels)"
-                )
-            return img.convert("RGB"), post
+            img = _check_pixels(img.convert("RGB"))
         except Exception as e:
             last_err = e
             continue
+        if REDDIT_CACHE_ENABLED:
+            if reddit_image_cache.store_image(sub, img, post):
+                stored += 1
+        elif direct is None:
+            direct = (img, post)
+            break
+
+    if not REDDIT_CACHE_ENABLED:
+        if direct is not None:
+            return direct
+        raise RedditImageError(
+            f"Could not download an image from r/{sub}"
+            + (f": {last_err}" if last_err else "")
+        )
+
+    log.info(
+        "event=reddit_cache_fill sub=%s listed=%s stored=%s depth=%s",
+        sub,
+        len(posts),
+        stored,
+        reddit_image_cache.count(sub),
+    )
+
+    for _ in range(max(1, attempts)):
+        hit = reddit_image_cache.claim(sub)
+        if hit is None:
+            break
+        img, post = hit
+        try:
+            return _check_pixels(img), post
+        except RedditImageError:
+            continue
+
     raise RedditImageError(
-        f"Could not download an image from r/{_normalize_subreddit(subreddit)}"
+        f"Could not obtain an image from r/{sub}"
         + (f": {last_err}" if last_err else "")
     )

@@ -10,10 +10,11 @@ Printer MAC: `25:00:27:00:1B:D5`. API on HA host `:8080`. Default subreddit: `wu
 
 ## Current shipped version
 
-**1.1.21** (`ha-addon/config.yaml`). On share after deploy + Rebuild/Update. Confirm in HA: **Settings → Apps → Cat Printer**.
+**1.1.22** (`ha-addon/config.yaml`). On share after deploy + Rebuild/Update. Confirm in HA: **Settings → Apps → Cat Printer**.
 
 Recent commits:
 
+- (pending) 1.1.22 — per-subreddit reddit image disk cache (claim/delete)
 - `1dac511` — probe.log; remove `/print/text`; pin deps; SSRF on image fetches
 - `5495864` — quieter, non-duplicated logs; `queued`/`printed` correlated by req+job
 - `15b5295` — listing batches of 20; retry random `before` window if no stills
@@ -77,7 +78,15 @@ Then read `S:\cat_printer_addon.log` / `\\home.lan\config\cat_printer_addon.log`
 
 Optional local layout: gitignored `.ha/` symlinks to UNC shares (see below). `.ha` is already in `.gitignore`.
 
-## Sleep findings (Phase A — 2026-08-07)
+### Reddit image cache (1.1.22)
+
+Per-sub folder under `/data/reddit_cache/{sub}/` (env `REDDIT_CACHE_DIR`). Flow:
+
+1. Claim cached still for that sub only → delete file → print
+2. On miss: list ~20 posts, download usable stills into that sub folder, claim one
+3. Next taps hit cache until empty (`event=reddit_cache_hit remaining=N`); never crosses subs
+
+Disable with `REDDIT_CACHE_ENABLED=0`.
 
 Evidence from pre-1.1.21 `addon.log` (when awake probes were still INFO):
 
@@ -163,12 +172,10 @@ python -m pytest tests/ -q --tb=short
 
 ## Backlog
 
-- **Phase B keep-awake** — after more probe.log soak numbers; env-flagged, zero paper, respect print lock. See remote-agent section.
-- **Phase C soak checklist** — write when B ships.
-- **Per-subreddit image cache** — store stills keyed by subreddit; delete each image when printed; never serve `r/chonkers` for an `r/wunkus` request.
+- **Keep-awake / sleep torture — parked** — workable with 120s status polls + HA revive for now; revisit if sleepy becomes painful again.
 - **Documentation pass** — HANDOVER / README / deploy path naming (`local_apps` vs legacy `addons`) when signing off.
 
-Done this pass: probe history log, `/print/text` removed, deps pinned, SSRF on image URL fetches.
+Done recently: probe history log, `/print/text` removed, deps pinned, SSRF on image fetches, **per-subreddit reddit image disk cache**.
 
 ## User preference
 
