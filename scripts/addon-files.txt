@@ -9,6 +9,7 @@ image_prep.py
 reddit_image.py
 api.py
 log_setup.py
+net_guard.py
 cat-printer.py
 markdown_renderer.py
 requirements.txt

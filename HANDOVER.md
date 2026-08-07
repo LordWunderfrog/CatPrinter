@@ -10,10 +10,11 @@ Printer MAC: `25:00:27:00:1B:D5`. API on HA host `:8080`. Default subreddit: `wu
 
 ## Current shipped version
 
-**1.1.20** (`ha-addon/config.yaml`). On share after deploy + Rebuild/Update. Confirm in HA: **Settings → Apps → Cat Printer**.
+**1.1.21** (`ha-addon/config.yaml`). On share after deploy + Rebuild/Update. Confirm in HA: **Settings → Apps → Cat Printer**.
 
 Recent commits:
 
+- (pending) 1.1.21 — probe.log; remove `/print/text`; pin deps; SSRF on image fetches
 - `5495864` — quieter, non-duplicated logs; `queued`/`printed` correlated by req+job
 - `15b5295` — listing batches of 20; retry random `before` window if no stills
 - `9a709e8` — Arctic without `url=` (was 422 timeout); RSS fallback; listing cache
@@ -52,12 +53,17 @@ Cursor rule: `.cursor/rules/ha-addon-deploy.mdc`. Checkpoint rule: commit/push a
 
 ## Logs (important)
 
-Live app log (preferred — no dump step):
+Job log (glanceable — queued/printed only at INFO):
 
-`\\home.lan\share\cat_printer\addon.log`  
-(or `.ha\share\cat_printer\addon.log` if you linked share — see workspace tip)
+`\\home.lan\share\cat_printer\addon.log`
 
-Rotating file from the add-on (`LOG_FILE`, map `share:rw`). Agent can read this anytime over Samba.
+Probe / awake history (every status poll, including awake — for keep-awake work):
+
+`\\home.lan\share\cat_printer\probe.log`
+
+(or `.ha\share\cat_printer\...` if linked)
+
+Both rotate under `share:rw`. Env: `LOG_FILE`, `PROBE_LOG_FILE`.
 
 Add-on stdout is **also** in Supervisor/journal. Optional dump from SSH/Terminal on HA:
 
@@ -68,9 +74,29 @@ ha apps logs local_cat_printer > /config/cat_printer_addon.log
 Then read `S:\cat_printer_addon.log` / `\\home.lan\config\cat_printer_addon.log`.
 
 - Slug for CLI: **`local_cat_printer`** (not display name, not bare `cat_printer`).
-- Earlier dump showed mostly `/status` awake polls + one Reddit fail: Pullpush **502** for `r/wunkus` — never hit spool.
 
 Optional local layout: gitignored `.ha/` symlinks to UNC shares (see below). `.ha` is already in `.gitignore`.
+
+## Sleep findings (Phase A — 2026-08-07)
+
+Evidence from pre-1.1.21 `addon.log` (when awake probes were still INFO):
+
+| Marker | Time | Note |
+|--------|------|------|
+| `spool_drain_done` drained=2 | 17:25:00 | last successful print session |
+| probe awake | 17:25:19, 17:27:25 | HA `/status` every ~120s still firing |
+| probe **sleepy** (timed out) | **17:29:43** | **~4.7 min** after drain done |
+| probe awake again | 17:31:57 | ~2.2 min later (HA revive / wake path likely) |
+| awake polls continue | 17:31 → 18:10+ | no second sleepy in that window |
+
+Conclusions so far:
+
+1. Printer can sleep in **under 5 minutes** of idle after prints, even with 120s RFCOMM status polls.
+2. Those polls did **not** prevent the first nap (two awake probes between drain and sleepy).
+3. Auto-return to awake without a logged `wake_*` in that old file is ambiguous — need `probe.log` + `wake_*` under 1.1.21 for a clean wake success rate.
+4. No `spool_park` in that window (no print while sleepy).
+
+**Shipped for further measure (1.1.21):** `\\home.lan\share\cat_printer\probe.log` records every probe (including awake) with `duration_ms` and `idle_s` when known; main log gets `event=printer_state` only on transitions and `event=spool_park … idle_s=…` when a job parks. Re-measure after Rebuild before designing KEEP_AWAKE.
 
 ## Queue / settle — validated on hardware
 
@@ -137,9 +163,12 @@ python -m pytest tests/ -q --tb=short
 
 ## Backlog
 
-- **Probe / awake history (separate from main log)** — keep a durable history of `/status` and RFCOMM probe outcomes (awake/busy/sleepy + timing) without cluttering `addon.log`. Needed before experimenting with keeping the printer awake continuously. Likely a second rotating file under `/share/cat_printer/` (e.g. `probe.log`) or a small ring buffer endpoint; main log stays job-centric (`queued` / `printed`).
+- **Phase B keep-awake** — after more probe.log soak numbers; env-flagged, zero paper, respect print lock. See remote-agent section.
+- **Phase C soak checklist** — write when B ships.
 - **Per-subreddit image cache** — store stills keyed by subreddit; delete each image when printed; never serve `r/chonkers` for an `r/wunkus` request.
 - **Documentation pass** — HANDOVER / README / deploy path naming (`local_apps` vs legacy `addons`) when signing off.
+
+Done this pass: probe history log, `/print/text` removed, deps pinned, SSRF on image URL fetches.
 
 ## User preference
 
@@ -157,16 +186,13 @@ Out of scope (do not pick up): shopping-list/Grocy integrations, CI pipelines, R
 
 **Do not:** spam full prints, burn label stock, or “fix” sleep with extra feed newlines.
 
-**Phase A — measure (no behaviour change required beyond logging)**
+**Phase A — measure** — in progress / partial:
 
-1. From live log `\\home.lan\share\cat_printer\addon.log` (or `.ha\share\...`), characterise:
-   - time from last `event=printed` / drain done → first `printer=sleepy` / `spool_park`
-   - whether `/status` every 120s already delays sleep or not
-   - wake success rate (`wake_ok` vs give-up / needs_button)
-2. Add structured logs if gaps exist, e.g. `event=printer_state` transitions, `event=spool_park` with idle_s since last successful print. Keep glanceable (no status spam at INFO).
-3. Write findings into this file under a short **Sleep findings** subsection (numbers + log evidence). Bump patch version only if code/log changes ship.
+- Sleep findings subsection above (from 1.1.20-era log).
+- `probe.log` + `printer_state` / `spool_park idle_s` shipped in 1.1.21.
+- Next: Rebuild, idle soak, refine findings (wake success rate, idle_s distribution) before Phase B.
 
-**Phase B — keep-awake attempt (only after A has numbers)**
+**Phase B — keep-awake attempt (only after A has more numbers)**
 
 Design one low-cost strategy, discuss trade-offs in the commit/handover, then implement **behind an env flag** (default off), e.g. `KEEP_AWAKE=0|1`:
 
@@ -194,41 +220,18 @@ Document a soak plan in this file:
 
 If keep-awake fails: document “accept bounded revive” and stop chasing firmware miracles.
 
-### 2. Remove `/print/text` — **P1**
+### 2. Remove `/print/text` — **done (1.1.21)**
 
-Markdown + captioned reddit/image cover text needs.
+Markdown + captioned reddit/image cover text needs. `create_text_image` kept for captions.
 
-- Delete `POST /print/text`, `TextPrintRequest`, and dead imports in `api.py`
-- Keep `yhk_printer.create_text_image` (reddit captions / markdown still use it)
-- Update API docstring, Postman docs if they mention `/print/text`, README only if it documents the route
-- Tests: remove/adjust any `/print/text` coverage; ensure markdown/reddit still pass
-- Version bump + deploy
+### 3. Pin dependencies — **done (1.1.21)**
 
-### 3. Pin dependencies — **P2**
+`requirements.txt` now uses exact `==` pins from a known-good env.
 
-`requirements.txt` is lower-bounds only (`>=`). Rebuilds can pull breaking majors.
+### 4. Finish SSRF hardening for outbound fetches — **done (1.1.21)**
 
-- From a known-good venv (or the add-on image deps), pin tested versions (exact `==` or tight `~=` for Pillow, fastapi, uvicorn, starlette/pydantic as needed, mistune, qrcode, python-multipart)
-- Do **not** invent a heavy poetry/lock toolchain unless clearly worth it
-- Run full `pytest` after pinning
-- Version bump only if you also change runtime; otherwise commit pins alone is fine
-
-### 4. Finish SSRF hardening for outbound fetches — **P2**
-
-Markdown already best-effort blocks private hosts (`markdown_renderer`). Audit **all** outbound HTTP(S):
-
-- `reddit_image.py` image download URLs
-- Any remaining urlopen/requests in render/fetch paths
-
-Requirements:
-
-- Block link-local, loopback, private RFC1918, metadata IPs (same spirit as markdown)
-- Cap redirects onto private nets
-- Tests for reject cases (mirror `test_private_host_rejected`)
-- Do not break normal `i.redd.it` / public HTTPS stills
-
-LAN API remains trusted for callers; this is defence-in-depth if the API is ever exposed beyond LAN.
+Shared `net_guard.host_is_public`; markdown + `reddit_image` image downloads block private/loopback and reject redirects onto private nets. Public HTTPS (e.g. `i.redd.it`, imgur) unchanged.
 
 ---
 
-**Suggested remote-agent order:** 1A → 1B (flagged) → 2 → (3 or 4 when idle). Always read share logs before burning labels. Commit/push at checkpoints; `-Deploy` when HA runtime must change.
+**Suggested remote-agent order:** finish 1A soak readings → 1B (flagged) → Phase C checklist. Always read share logs before burning labels. Commit/push at checkpoints; `-Deploy` when HA runtime must change.

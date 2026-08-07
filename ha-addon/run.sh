@@ -23,8 +23,9 @@ fi
 export API_HOST="${API_HOST:-0.0.0.0}"
 export API_PORT="${API_PORT:-8080}"
 export DEFAULT_SUBREDDIT="${DEFAULT_SUBREDDIT:-wunkus}"
-# Samba-visible via \\home.lan\share\cat_printer\addon.log (map share:rw)
+# Samba-visible via \\home.lan\share\cat_printer\
 export LOG_FILE="${LOG_FILE:-/share/cat_printer/addon.log}"
-mkdir -p "$(dirname "$LOG_FILE")" || true
+export PROBE_LOG_FILE="${PROBE_LOG_FILE:-/share/cat_printer/probe.log}"
+mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$PROBE_LOG_FILE")" || true
 
 exec python /app/api.py

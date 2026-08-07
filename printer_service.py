@@ -23,10 +23,14 @@ from yhk_printer import (
 )
 
 log = logging.getLogger("cat_printer.service")
+probe_log = logging.getLogger("cat_printer.probe")
 
 # RLock: drain holds it for the whole queue pass; print_raster re-enters for each job.
 # Probes/wake must not open RFCOMM between jobs or during mech settle.
 _print_lock = threading.RLock()
+_state_lock = threading.Lock()
+_last_printer_state: str | None = None
+_last_print_ok_at: float | None = None
 
 # After bluetoothctl connect, brief pause before RFCOMM (Classic stack settle).
 WAKE_BT_SETTLE_S = float(os.environ.get("WAKE_BT_SETTLE_S", "1.0"))
@@ -52,6 +56,58 @@ class PrinterUnavailable(PrinterError):
 
 class PrintFailed(PrinterError):
     """Connected but the print job failed."""
+
+
+def note_print_ok() -> None:
+    """Call after a successful RFCOMM print (spool uses this for idle_s)."""
+    global _last_print_ok_at
+    with _state_lock:
+        _last_print_ok_at = time.monotonic()
+
+
+def idle_s_since_print() -> float | None:
+    with _state_lock:
+        if _last_print_ok_at is None:
+            return None
+        return max(0.0, time.monotonic() - _last_print_ok_at)
+
+
+def _record_probe(
+    *,
+    state: str,
+    mac: str,
+    duration_ms: int,
+    detail: str | None = None,
+    source: str = "probe",
+) -> None:
+    """Always write probe.log; main log only on state change (and sleepy/error)."""
+    global _last_printer_state
+    idle = idle_s_since_print()
+    idle_bit = f" idle_s={round(idle, 1)}" if idle is not None else ""
+    detail_bit = f" detail={detail}" if detail else ""
+    probe_log.info(
+        "event=probe source=%s printer=%s mac=%s duration_ms=%s%s%s",
+        source,
+        state,
+        mac,
+        duration_ms,
+        idle_bit,
+        detail_bit,
+    )
+    with _state_lock:
+        prev = _last_printer_state
+        _last_printer_state = state
+    if prev == state:
+        return
+    # Transitions are rare and useful in the main job log.
+    if state in ("sleepy", "error") or prev in ("sleepy", "error", None):
+        log.info(
+            "event=printer_state from=%s to=%s mac=%s%s",
+            prev or "-",
+            state,
+            mac,
+            idle_bit,
+        )
 
 
 @contextmanager
@@ -104,24 +160,34 @@ def probe(*, timeout: float) -> dict:
     Returns ok, printer (awake|busy|sleepy|error), printer_mac, optional detail.
     """
     cfg = get_config()
+    started = time.perf_counter()
     if not _print_lock.acquire(blocking=False):
-        log.debug("event=probe printer=busy mac=%s", cfg["mac"])
+        ms = int((time.perf_counter() - started) * 1000)
+        _record_probe(state="busy", mac=cfg["mac"], duration_ms=ms, source="status")
         return {"ok": True, "printer": "busy", "printer_mac": cfg["mac"]}
 
     try:
-        return _probe_unlocked(timeout=timeout)
+        return _probe_unlocked(timeout=timeout, source="status")
     finally:
         _print_lock.release()
 
 
-def _probe_unlocked(*, timeout: float) -> dict:
+def _probe_unlocked(*, timeout: float, source: str = "probe") -> dict:
     """RFCOMM probe; caller must hold `_print_lock`."""
     cfg = get_config()
+    started = time.perf_counter()
     try:
         with printer_session(probe=True, timeout=timeout):
             pass
     except OSError as e:
-        log.warning("event=probe printer=sleepy mac=%s error=%s", cfg["mac"], e)
+        ms = int((time.perf_counter() - started) * 1000)
+        _record_probe(
+            state="sleepy",
+            mac=cfg["mac"],
+            duration_ms=ms,
+            detail=str(e),
+            source=source,
+        )
         return {
             "ok": False,
             "printer": "sleepy",
@@ -129,14 +195,22 @@ def _probe_unlocked(*, timeout: float) -> dict:
             "detail": str(e),
         }
     except Exception as e:
-        log.warning("event=probe printer=error mac=%s error=%s", cfg["mac"], e)
+        ms = int((time.perf_counter() - started) * 1000)
+        _record_probe(
+            state="error",
+            mac=cfg["mac"],
+            duration_ms=ms,
+            detail=str(e),
+            source=source,
+        )
         return {
             "ok": False,
             "printer": "error",
             "printer_mac": cfg["mac"],
             "detail": str(e),
         }
-    log.debug("event=probe printer=awake mac=%s", cfg["mac"])
+    ms = int((time.perf_counter() - started) * 1000)
+    _record_probe(state="awake", mac=cfg["mac"], duration_ms=ms, source=source)
     return {"ok": True, "printer": "awake", "printer_mac": cfg["mac"]}
 
 
@@ -148,15 +222,17 @@ def wake(*, probe_timeout: float) -> dict:
     cfg = get_config()
     mac = cfg["mac"]
     log.info("event=wake_start mac=%s", mac)
+    started = time.perf_counter()
     if not _print_lock.acquire(blocking=False):
-        log.debug("event=probe printer=busy mac=%s", mac)
+        ms = int((time.perf_counter() - started) * 1000)
+        _record_probe(state="busy", mac=mac, duration_ms=ms, source="wake")
         body = {"ok": True, "printer": "busy", "printer_mac": mac}
         log.info("event=wake_ok mac=%s printer=busy", mac)
         return body
 
     try:
         bt_note = bluetoothctl_nudge(mac)
-        body = _probe_unlocked(timeout=probe_timeout)
+        body = _probe_unlocked(timeout=probe_timeout, source="wake")
         if bt_note:
             body = {**body, "bluetoothctl": bt_note}
         if body.get("ok"):

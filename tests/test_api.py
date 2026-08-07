@@ -2,12 +2,8 @@
 from pathlib import Path
 
 import PIL.Image
-import pytest
-from pydantic import ValidationError
 
 from api import (
-    MAX_TEXT_CHARS,
-    TextPrintRequest,
     _compose_captioned_image,
     _default_subreddit,
     _extract_token,
@@ -41,11 +37,6 @@ def test_compose_captioned_image_stacks_title():
     assert titled.mode == "1"
     assert titled.width == 200
     assert titled.height > bare.height
-
-
-def test_text_rejects_absurd_size():
-    with pytest.raises(ValidationError):
-        TextPrintRequest(text="x" * (MAX_TEXT_CHARS + 1))
 
 
 def test_default_subreddit_env(monkeypatch):

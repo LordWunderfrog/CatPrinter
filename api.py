@@ -5,13 +5,14 @@ HTTP API for the YHK cat printer. Intended for LAN / HA / reverse-proxy callers.
   GET  /ready    — RFCOMM probe; 503 if sleepy/unreachable (no auth)
   GET  /status   — same probe as /ready but always HTTP 200 (HA sensors)
   POST /printer/wake — BT nudge + RFCOMM probe (auth if API_TOKEN set)
-  POST /print/text|markdown|image|reddit — validate, spool to disk, 202
+  POST /print/markdown|image|reddit — validate, spool to disk, 202
 
 Env (in addition to yhk_printer / printer_service):
   API_HOST, API_PORT, API_TOKEN, DEFAULT_SUBREDDIT
   MAX_TEXT_CHARS, MAX_MARKDOWN_CHARS, MAX_UPLOAD_BYTES, MAX_IMAGE_PIXELS
   MAX_RENDER_HEIGHT, MAX_PRINT_QUEUE, PRINT_SPOOL_DIR, SPOOL_TTL_S
-  LOG_FILE — rotating file log (add-on default: /share/cat_printer/addon.log)
+  LOG_FILE — job log (add-on default: /share/cat_printer/addon.log)
+  PROBE_LOG_FILE — awake/probe history (default: beside LOG_FILE as probe.log)
 
 Print routes write a raster to the disk spool and return 202. Drain runs
 opportunistically (after enqueue if awake, after wake/status when awake) —
@@ -44,7 +45,7 @@ from print_spool import QueueFull, print_spool
 from reddit_image import RedditImageError, fetch_random_subreddit_image
 from yhk_printer import create_text_image, get_config
 
-_log_file = configure_logging()
+_log_file, _probe_log_file = configure_logging()
 log = logging.getLogger("cat_printer.api")
 
 # Crash-level ceilings only — normal receipts/photos sail under these.
@@ -63,11 +64,6 @@ def _api_token() -> str:
 
 def _default_subreddit() -> str:
     return (os.environ.get("DEFAULT_SUBREDDIT") or "wunkus").strip() or "wunkus"
-
-
-class TextPrintRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=MAX_TEXT_CHARS)
-    font_size: int = Field(65, ge=8, le=200)
 
 
 class MarkdownPrintRequest(BaseModel):
@@ -118,7 +114,8 @@ async def lifespan(_app: FastAPI):
     cfg = get_config()
     token_on = bool(_api_token())
     log.info(
-        "event=startup mac=%s port=%s auth=%s sub=%s spool=%s queue_max=%s log=%s",
+        "event=startup mac=%s port=%s auth=%s sub=%s spool=%s queue_max=%s "
+        "log=%s probe_log=%s",
         cfg["mac"],
         cfg["port"],
         "on" if token_on else "off",
@@ -126,6 +123,7 @@ async def lifespan(_app: FastAPI):
         print_spool.stats()["spool_dir"],
         print_spool.maxsize,
         _log_file or "-",
+        _probe_log_file or "-",
     )
     # Rebuild/restart: try once if the cat is already up.
     print_spool.drain_async(reason="startup")
@@ -278,23 +276,6 @@ def printer_wake():
     if body.get("ok"):
         return body
     return JSONResponse(status_code=503, content=body)
-
-
-@app.post("/print/text")
-def print_text_endpoint(request: Request, body: TextPrintRequest):
-    req_id = getattr(request.state, "req_id", "-")
-    cfg = get_config()
-    try:
-        img = create_text_image(
-            body.text,
-            cfg["width"],
-            font_path=cfg["font_path"],
-            font_size=body.font_size,
-            max_height=MAX_RENDER_HEIGHT,
-        ).convert("1")
-    except ValueError as e:
-        raise HTTPException(status_code=413, detail=str(e)) from e
-    return _enqueue_or_http("text", req_id, img, chars=len(body.text))
 
 
 @app.post("/print/markdown")

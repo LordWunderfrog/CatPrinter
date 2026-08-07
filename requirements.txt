@@ -1,6 +1,10 @@
-Pillow>=10.0.0
-fastapi>=0.115.0
-uvicorn[standard]>=0.32.0
-python-multipart>=0.0.9
-mistune>=3.0.0
-qrcode[pil]>=7.4.0
+# Pinned from a known-good local env (2026-08-07). Rebuilds should stay reproducible.
+Pillow==12.1.0
+fastapi==0.141.1
+uvicorn[standard]==0.52.1
+python-multipart==0.0.32
+mistune==3.3.4
+qrcode[pil]==8.2
+starlette==1.4.1
+pydantic==2.13.4
+anyio==4.14.2

@@ -17,7 +17,14 @@ from typing import Any
 
 import PIL.Image
 
-from printer_service import PrintFailed, PrinterUnavailable, hold_printer, print_raster
+from printer_service import (
+    PrintFailed,
+    PrinterUnavailable,
+    hold_printer,
+    idle_s_since_print,
+    note_print_ok,
+    print_raster,
+)
 from yhk_printer import estimate_print_height
 
 log = logging.getLogger("cat_printer.spool")
@@ -184,11 +191,16 @@ class PrintSpool:
                         # stay out for the full mech feed window.
                         print_raster(kind, req_id, img, settle_s=settle)
                     except PrinterUnavailable as e:
+                        idle = idle_s_since_print()
+                        idle_bit = (
+                            f" idle_s={round(idle, 1)}" if idle is not None else ""
+                        )
                         log.info(
-                            "event=spool_park reason=%s job_id=%s detail=%s",
+                            "event=spool_park reason=%s job=%s detail=%s%s",
                             reason,
                             job_id,
                             e,
+                            idle_bit,
                         )
                         stopped = "sleepy"
                         self._arm_sleepy_retry()
@@ -221,6 +233,7 @@ class PrintSpool:
                     waited = int(
                         time.time() - float(payload.get("enqueued_at") or time.time())
                     )
+                    note_print_ok()
                     log.info(
                         "event=printed req=%s job=%s kind=%s height=%s settle_s=%s "
                         "waited_s=%s depth=%s",

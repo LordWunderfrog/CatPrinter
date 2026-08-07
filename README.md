@@ -28,7 +28,7 @@ python api.py   # http://0.0.0.0:8080
 ```bash
 curl http://localhost:8080/health
 curl http://localhost:8080/ready
-curl -X POST http://localhost:8080/print/text -H "Content-Type: application/json" -d "{\"text\":\"hello\",\"font_size\":65}"
+curl -X POST http://localhost:8080/print/markdown -H "Content-Type: application/json" -d "{\"markdown\":\"# hello\"}"
 curl -X POST http://localhost:8080/print/markdown -H "Content-Type: application/json" -d "{\"markdown\":\"# List\\n\\n- milk\\n- eggs\"}"
 curl -X POST http://localhost:8080/print/image -F "file=@images/Turtle.jpg"
 curl -X POST http://localhost:8080/print/reddit -H "Content-Type: application/json" -d "{}"

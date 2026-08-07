@@ -10,9 +10,7 @@ from __future__ import annotations
 
 import base64
 import io
-import ipaddress
 import re
-import socket
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,6 +24,7 @@ import PIL.ImageFont
 import qrcode
 
 from image_prep import prepare_raster_image
+from net_guard import host_is_public as _host_is_public
 
 # ---------------------------------------------------------------------------
 # Styles — swap sizes/paths later without touching layout logic
@@ -196,33 +195,6 @@ def _load_data_uri(src: str) -> PIL.Image.Image | None:
     img = PIL.Image.open(io.BytesIO(raw))
     img.load()
     return img.convert("RGB")
-
-
-def _host_is_public(hostname: str) -> bool:
-    """Reject localhost / private / link-local / metadata-ish targets (best-effort)."""
-    host = (hostname or "").strip().lower().rstrip(".")
-    if not host or host == "localhost" or host.endswith(".localhost"):
-        return False
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except socket.gaierror:
-        return False
-    for info in infos:
-        raw = info[4][0]
-        try:
-            ip = ipaddress.ip_address(raw)
-        except ValueError:
-            continue
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-            or ip.is_unspecified
-        ):
-            return False
-    return True
 
 
 def _load_http(url: str) -> PIL.Image.Image | None:

@@ -101,6 +101,13 @@ def _http_get_bytes(
     timeout: float = 30.0,
     max_bytes: int = DEFAULT_MAX_IMAGE_BYTES,
 ) -> bytes:
+    from net_guard import host_is_public
+
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise RedditImageError(f"Unsupported image URL: {url!r}")
+    if not host_is_public(parsed.hostname):
+        raise RedditImageError(f"Blocked non-public image host: {parsed.hostname}")
     req = urllib.request.Request(
         url,
         headers=_browser_headers(
@@ -109,6 +116,11 @@ def _http_get_bytes(
         ),
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
+        final = urllib.parse.urlparse(resp.geturl())
+        if final.hostname and not host_is_public(final.hostname):
+            raise RedditImageError(
+                f"Blocked redirect to non-public host: {final.hostname}"
+            )
         return _read_capped(resp, max_bytes)
 
 
