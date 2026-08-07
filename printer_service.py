@@ -99,53 +99,71 @@ def probe(*, timeout: float) -> dict:
         return {"ok": True, "printer": "busy", "printer_mac": cfg["mac"]}
 
     try:
-        try:
-            with printer_session(probe=True, timeout=timeout):
-                pass
-        except OSError as e:
-            log.warning("event=probe printer=sleepy mac=%s error=%s", cfg["mac"], e)
-            return {
-                "ok": False,
-                "printer": "sleepy",
-                "printer_mac": cfg["mac"],
-                "detail": str(e),
-            }
-        except Exception as e:
-            log.warning("event=probe printer=error mac=%s error=%s", cfg["mac"], e)
-            return {
-                "ok": False,
-                "printer": "error",
-                "printer_mac": cfg["mac"],
-                "detail": str(e),
-            }
-        log.info("event=probe printer=awake mac=%s", cfg["mac"])
-        return {"ok": True, "printer": "awake", "printer_mac": cfg["mac"]}
+        return _probe_unlocked(timeout=timeout)
     finally:
         _print_lock.release()
+
+
+def _probe_unlocked(*, timeout: float) -> dict:
+    """RFCOMM probe; caller must hold `_print_lock`."""
+    cfg = get_config()
+    try:
+        with printer_session(probe=True, timeout=timeout):
+            pass
+    except OSError as e:
+        log.warning("event=probe printer=sleepy mac=%s error=%s", cfg["mac"], e)
+        return {
+            "ok": False,
+            "printer": "sleepy",
+            "printer_mac": cfg["mac"],
+            "detail": str(e),
+        }
+    except Exception as e:
+        log.warning("event=probe printer=error mac=%s error=%s", cfg["mac"], e)
+        return {
+            "ok": False,
+            "printer": "error",
+            "printer_mac": cfg["mac"],
+            "detail": str(e),
+        }
+    log.info("event=probe printer=awake mac=%s", cfg["mac"])
+    return {"ok": True, "printer": "awake", "printer_mac": cfg["mac"]}
 
 
 def wake(*, probe_timeout: float) -> dict:
     """
     One nudge + one probe. Does not loop — HA owns attempt limits / cooldown.
+    Never bluetoothctl-disconnects while a print (or mech settle) holds the lock.
     """
     cfg = get_config()
     mac = cfg["mac"]
     log.info("event=wake_start mac=%s", mac)
-    bt_note = bluetoothctl_nudge(mac)
-    body = probe(timeout=probe_timeout)
-    if bt_note:
-        body = {**body, "bluetoothctl": bt_note}
-    if body.get("ok"):
-        log.info("event=wake_ok mac=%s printer=%s", mac, body.get("printer"))
-    else:
-        log.warning("event=wake_fail mac=%s detail=%s", mac, body.get("detail"))
-    return body
+    if not _print_lock.acquire(blocking=False):
+        log.info("event=probe printer=busy mac=%s", mac)
+        body = {"ok": True, "printer": "busy", "printer_mac": mac}
+        log.info("event=wake_ok mac=%s printer=busy", mac)
+        return body
+
+    try:
+        bt_note = bluetoothctl_nudge(mac)
+        body = _probe_unlocked(timeout=probe_timeout)
+        if bt_note:
+            body = {**body, "bluetoothctl": bt_note}
+        if body.get("ok"):
+            log.info("event=wake_ok mac=%s printer=%s", mac, body.get("printer"))
+        else:
+            log.warning("event=wake_fail mac=%s detail=%s", mac, body.get("detail"))
+        return body
+    finally:
+        _print_lock.release()
 
 
 def run_print(
     job: str,
     req_id: str,
     fn: Callable,
+    *,
+    settle_s: float = 0.0,
 ) -> None:
     """
     Determinate print flow under the lock:
@@ -154,6 +172,7 @@ def run_print(
       2. Run job
       3. On EBUSY: settle and retry (adapter catching up after prior job)
       4. On sleepy/host-down: one bluetoothctl nudge + one more session
+      5. Hold the lock for settle_s so status/wake cannot RFCOMM mid-feed
 
     Raises PrinterUnavailable / PrintFailed. Never raises HTTPException.
     """
@@ -200,12 +219,20 @@ def run_print(
         except Exception as e:
             log.error("event=print_fail job=%s req_id=%s error=%s", job, req_id, e)
             raise PrintFailed(str(e)) from e
+        if settle_s > 0:
+            log.info(
+                "event=print_mech_settle job=%s req_id=%s settle_s=%s",
+                job,
+                req_id,
+                round(settle_s, 1),
+            )
+            time.sleep(settle_s)
     log.info("event=print_ok job=%s req_id=%s", job, req_id)
 
 
-def print_raster(job: str, req_id: str, img) -> None:
-    """Print a prepared PIL image (mode 1 preferred)."""
-    run_print(job, req_id, lambda soc: print_image(soc, img))
+def print_raster(job: str, req_id: str, img, *, settle_s: float = 0.0) -> None:
+    """Print a prepared PIL image (mode 1 preferred). Holds lock through settle_s."""
+    run_print(job, req_id, lambda soc: print_image(soc, img), settle_s=settle_s)
 
 
 def _run_session(fn: Callable) -> None:

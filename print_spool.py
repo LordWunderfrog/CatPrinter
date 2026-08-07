@@ -140,7 +140,8 @@ class PrintSpool:
         """
         Print pending jobs FIFO until empty or printer unavailable.
         Re-lists the spool after each job so mid-drain enqueues are not skipped.
-        Waits for mechanical feed after each RFCOMM send before starting the next.
+        Waits for mechanical feed under the print lock after each RFCOMM send
+        so status/wake probes cannot interrupt mid-page.
         """
         if not self._drain_lock.acquire(blocking=False):
             log.info("event=spool_drain_skip reason=%s detail=already_draining", reason)
@@ -178,8 +179,11 @@ class PrintSpool:
 
                 kind = payload.get("kind") or "spool"
                 req_id = payload.get("req_id") or "-"
+                settle = _mech_settle_s(img.height)
                 try:
-                    print_raster(kind, req_id, img)
+                    # Settle is inside print_raster under the print lock so
+                    # /status and /printer/wake cannot RFCOMM mid-feed.
+                    print_raster(kind, req_id, img, settle_s=settle)
                 except PrinterUnavailable as e:
                     log.info(
                         "event=spool_park reason=%s job_id=%s detail=%s",
@@ -217,7 +221,6 @@ class PrintSpool:
                 waited = int(
                     time.time() - float(payload.get("enqueued_at") or time.time())
                 )
-                settle = _mech_settle_s(img.height)
                 log.info(
                     "event=spool_print_ok job_id=%s kind=%s req_id=%s waited_s=%s "
                     "reason=%s settle_s=%s height=%s",
@@ -231,8 +234,6 @@ class PrintSpool:
                 )
                 self._drop(job_id)
                 drained += 1
-                if settle > 0:
-                    time.sleep(settle)
         finally:
             self._drain_lock.release()
 

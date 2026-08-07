@@ -11,7 +11,7 @@ from print_spool import PrintSpool, QueueFull
 def test_submit_persists_files(tmp_path, monkeypatch):
     printed: list[str] = []
 
-    def fake_print(kind, req_id, img):
+    def fake_print(kind, req_id, img, **kwargs):
         printed.append(kind)
 
     monkeypatch.setattr("print_spool.print_raster", fake_print)
@@ -66,7 +66,7 @@ def test_park_on_sleepy_keeps_job(tmp_path, monkeypatch):
 def test_drain_prints_fifo(tmp_path, monkeypatch):
     printed: list[str] = []
 
-    def fake_print(kind, req_id, img):
+    def fake_print(kind, req_id, img, **kwargs):
         printed.append(req_id)
 
     monkeypatch.setattr("print_spool.print_raster", fake_print)
@@ -93,7 +93,7 @@ def test_drain_picks_up_mid_drain_enqueue(tmp_path, monkeypatch):
     monkeypatch.setattr(spool, "drain_async", lambda **k: None)
     monkeypatch.setattr("print_spool._mech_settle_s", lambda h: 0)
 
-    def fake_print(kind, req_id, img):
+    def fake_print(kind, req_id, img, **kwargs):
         printed.append(req_id)
         if req_id == "first":
             spool.submit(
