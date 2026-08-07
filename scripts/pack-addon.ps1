@@ -50,4 +50,4 @@ if ($rc -ge 8) {
 }
 
 Write-Host "Deployed to $DeployPath"
-Write-Host "In HA: Settings → Add-ons → Cat Printer → Rebuild (then Start if stopped)."
+Write-Host "In HA: Settings → Apps → Cat Printer → Rebuild (then Start if stopped)."

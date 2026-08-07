@@ -68,4 +68,4 @@ mkdir -p "$DEPLOY_PATH"
 rsync -a --delete "$OUT/" "$DEPLOY_PATH/"
 
 echo "Deployed to $DEPLOY_PATH"
-echo "In HA: Settings → Add-ons → Cat Printer → Rebuild (then Start if stopped)."
+echo "In HA: Settings → Apps → Cat Printer → Rebuild (then Start if stopped)."

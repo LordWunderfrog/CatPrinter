@@ -19,7 +19,7 @@ App code lives at repo root; `ha-addon/` is metadata only. HA runs a packed copy
 2. Pack + sync:
    - Windows: `powershell -NoProfile -File scripts/pack-addon.ps1 -Deploy`
    - Override path: `-DeployPath` or env `CAT_PRINTER_ADDON_DEPLOY` (default `\\home.lan\addons\cat_printer`)
-3. Tell the user to **Rebuild** Cat Printer in HA UI (Settings → Add-ons). Do not pretend rebuild is automatic.
+3. Tell the user to **Rebuild** Cat Printer in HA UI (Settings → Apps). Do not pretend rebuild is automatic. Samba path remains `/addons` unless HA renames the share.
 4. Optional: sync `ha/cat_printer.yaml` to `\\home.lan\config\packages\` only when that package changed — separate from add-on pack.
 5. At a significant checkpoint (feature landed, deploy shipped, clear stop): commit and push to `origin` without waiting to be asked.
 
