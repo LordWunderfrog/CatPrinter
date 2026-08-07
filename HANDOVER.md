@@ -14,7 +14,7 @@ Printer MAC: `25:00:27:00:1B:D5`. API on HA host `:8080`. Default subreddit: `wu
 
 Recent commits (paper / queue hardening + Samba logs):
 
-- (pending) 1.1.16 — rotating app log on `/share/cat_printer/addon.log` (`share:rw`)
+- `4196d3e` — rotating app log on `/share/cat_printer/addon.log` (`share:rw`)
 - `4fb3b49` — hold print lock for whole drain; no wake-retry reprint after partial send; settle after failed sends; conservative settle (5s floor, 25 px/s)
 - `6d4ef50` — settle under print lock (status was RFCOMM mid-feed)
 - Earlier: re-list drain until empty; EBUSY = settle-retry not sleepy; HA NFC `mode: queued`
