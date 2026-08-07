@@ -135,6 +135,12 @@ cmd /c mklink /D ".ha\share" "\\home.lan\share"
 python -m pytest tests/ -q --tb=short
 ```
 
+## Backlog
+
+- **Probe / awake history (separate from main log)** — keep a durable history of `/status` and RFCOMM probe outcomes (awake/busy/sleepy + timing) without cluttering `addon.log`. Needed before experimenting with keeping the printer awake continuously. Likely a second rotating file under `/share/cat_printer/` (e.g. `probe.log`) or a small ring buffer endpoint; main log stays job-centric (`queued` / `printed`).
+- **Per-subreddit image cache** — store stills keyed by subreddit; delete each image when printed; never serve `r/chonkers` for an `r/wunkus` request.
+- **Documentation pass** — HANDOVER / README / deploy path naming (`local_apps` vs legacy `addons`) when signing off.
+
 ## User preference
 
 Direct, blunt, no paper waste. Prefer long boring settle gaps over smashed jobs. Don’t agree for comfort — challenge bad approaches.
