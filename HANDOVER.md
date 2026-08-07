@@ -132,9 +132,97 @@ cmd /c mklink /D ".ha\share" "\\home.lan\share"
 ## Tests
 
 ```powershell
-python -m pytest tests/test_print_spool.py tests/test_printer_service.py tests/test_yhk_printer.py tests/test_api.py -q
+python -m pytest tests/ -q --tb=short
 ```
 
 ## User preference
 
 Direct, blunt, no paper waste. Prefer long boring settle gaps over smashed jobs. Don’t agree for comfort — challenge bad approaches.
+
+---
+
+## Backlog for remote agents (ordered)
+
+Out of scope (do not pick up): shopping-list/Grocy integrations, CI pipelines, README rewrite, typed-config/adapter refactors, `.ha` link scripts (user already linked shares), inventing caller payloads.
+
+### 1. Keep-awake / sleep torture — **P0**
+
+**Problem:** Printer goes sleepy; jobs park; HA bounded revive + power button. Queue/settle are fixed; sleep is the remaining reliability hole.
+
+**Do not:** spam full prints, burn label stock, or “fix” sleep with extra feed newlines.
+
+**Phase A — measure (no behaviour change required beyond logging)**
+
+1. From live log `\\home.lan\share\cat_printer\addon.log` (or `.ha\share\...`), characterise:
+   - time from last `event=printed` / drain done → first `printer=sleepy` / `spool_park`
+   - whether `/status` every 120s already delays sleep or not
+   - wake success rate (`wake_ok` vs give-up / needs_button)
+2. Add structured logs if gaps exist, e.g. `event=printer_state` transitions, `event=spool_park` with idle_s since last successful print. Keep glanceable (no status spam at INFO).
+3. Write findings into this file under a short **Sleep findings** subsection (numbers + log evidence). Bump patch version only if code/log changes ship.
+
+**Phase B — keep-awake attempt (only after A has numbers)**
+
+Design one low-cost strategy, discuss trade-offs in the commit/handover, then implement **behind an env flag** (default off), e.g. `KEEP_AWAKE=0|1`:
+
+Candidates (pick based on A; do not implement all):
+
+- Periodic lightweight RFCOMM probe while spool non-empty or for N minutes after last print
+- Less aggressive bluetoothctl disconnect in wake paths
+- HA status interval tweak only if A shows 120s polls are useless or harmful
+
+Constraints:
+
+- Must hold `_print_lock` / `hold_printer` rules — never RFCOMM mid-settle/drain
+- Must not open sessions that abort mechanical feed
+- Paper cost of the strategy must be **zero** (probes only, no raster)
+
+Ship: tests for lock/skip behaviour, version bump, `-Deploy`, tell user to Rebuild, then ask for a soak test.
+
+**Phase C — torture (user runs; agent prepares the checklist)**
+
+Document a soak plan in this file:
+
+- Idle awake 15–30 min with KEEP_AWAKE on vs off; watch sleepy
+- Queue a job, power-idle mid-wait, confirm park + revive still sane
+- Pass = fewer sleepy events / fewer needs_button without smashed pages
+
+If keep-awake fails: document “accept bounded revive” and stop chasing firmware miracles.
+
+### 2. Remove `/print/text` — **P1**
+
+Markdown + captioned reddit/image cover text needs.
+
+- Delete `POST /print/text`, `TextPrintRequest`, and dead imports in `api.py`
+- Keep `yhk_printer.create_text_image` (reddit captions / markdown still use it)
+- Update API docstring, Postman docs if they mention `/print/text`, README only if it documents the route
+- Tests: remove/adjust any `/print/text` coverage; ensure markdown/reddit still pass
+- Version bump + deploy
+
+### 3. Pin dependencies — **P2**
+
+`requirements.txt` is lower-bounds only (`>=`). Rebuilds can pull breaking majors.
+
+- From a known-good venv (or the add-on image deps), pin tested versions (exact `==` or tight `~=` for Pillow, fastapi, uvicorn, starlette/pydantic as needed, mistune, qrcode, python-multipart)
+- Do **not** invent a heavy poetry/lock toolchain unless clearly worth it
+- Run full `pytest` after pinning
+- Version bump only if you also change runtime; otherwise commit pins alone is fine
+
+### 4. Finish SSRF hardening for outbound fetches — **P2**
+
+Markdown already best-effort blocks private hosts (`markdown_renderer`). Audit **all** outbound HTTP(S):
+
+- `reddit_image.py` image download URLs
+- Any remaining urlopen/requests in render/fetch paths
+
+Requirements:
+
+- Block link-local, loopback, private RFC1918, metadata IPs (same spirit as markdown)
+- Cap redirects onto private nets
+- Tests for reject cases (mirror `test_private_host_rejected`)
+- Do not break normal `i.redd.it` / public HTTPS stills
+
+LAN API remains trusted for callers; this is defence-in-depth if the API is ever exposed beyond LAN.
+
+---
+
+**Suggested remote-agent order:** 1A → 1B (flagged) → 2 → (3 or 4 when idle). Always read share logs before burning labels. Commit/push at checkpoints; `-Deploy` when HA runtime must change.
