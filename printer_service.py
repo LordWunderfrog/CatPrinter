@@ -105,7 +105,7 @@ def probe(*, timeout: float) -> dict:
     """
     cfg = get_config()
     if not _print_lock.acquire(blocking=False):
-        log.info("event=probe printer=busy mac=%s", cfg["mac"])
+        log.debug("event=probe printer=busy mac=%s", cfg["mac"])
         return {"ok": True, "printer": "busy", "printer_mac": cfg["mac"]}
 
     try:
@@ -136,7 +136,7 @@ def _probe_unlocked(*, timeout: float) -> dict:
             "printer_mac": cfg["mac"],
             "detail": str(e),
         }
-    log.info("event=probe printer=awake mac=%s", cfg["mac"])
+    log.debug("event=probe printer=awake mac=%s", cfg["mac"])
     return {"ok": True, "printer": "awake", "printer_mac": cfg["mac"]}
 
 
@@ -149,7 +149,7 @@ def wake(*, probe_timeout: float) -> dict:
     mac = cfg["mac"]
     log.info("event=wake_start mac=%s", mac)
     if not _print_lock.acquire(blocking=False):
-        log.info("event=probe printer=busy mac=%s", mac)
+        log.debug("event=probe printer=busy mac=%s", mac)
         body = {"ok": True, "printer": "busy", "printer_mac": mac}
         log.info("event=wake_ok mac=%s printer=busy", mac)
         return body
@@ -202,26 +202,26 @@ def run_print(
             except OSError as first:
                 if started:
                     log.error(
-                        "event=print_fail job=%s req_id=%s error=%s partial_send=1",
-                        job,
+                        "event=print_fail req=%s kind=%s error=%s partial_send=1",
                         req_id,
+                        job,
                         first,
                     )
                     raise PrintFailed(str(first)) from first
                 if is_busy_error(first):
                     log.error(
-                        "event=print_fail job=%s req_id=%s error=%s", job, req_id, first
+                        "event=print_fail req=%s kind=%s error=%s", req_id, job, first
                     )
                     raise PrinterUnavailable(str(first)) from first
                 if not is_retryable_connect_error(first):
                     log.error(
-                        "event=print_fail job=%s req_id=%s error=%s", job, req_id, first
+                        "event=print_fail req=%s kind=%s error=%s", req_id, job, first
                     )
                     raise PrinterUnavailable(str(first)) from first
                 log.warning(
-                    "event=print_wake_retry job=%s req_id=%s error=%s",
-                    job,
+                    "event=print_wake_retry req=%s kind=%s error=%s",
                     req_id,
+                    job,
                     first,
                 )
                 bluetoothctl_nudge(cfg["mac"])
@@ -229,9 +229,9 @@ def run_print(
                     _run_session_settled(job, req_id, tracking_fn)
                 except OSError as second:
                     log.error(
-                        "event=print_fail job=%s req_id=%s error=%s after_wake=1",
-                        job,
+                        "event=print_fail req=%s kind=%s error=%s after_wake=1",
                         req_id,
+                        job,
                         second,
                     )
                     raise PrinterUnavailable(str(second)) from second
@@ -239,24 +239,24 @@ def run_print(
                     raise
                 except Exception as e:
                     log.error(
-                        "event=print_fail job=%s req_id=%s error=%s", job, req_id, e
+                        "event=print_fail req=%s kind=%s error=%s", req_id, job, e
                     )
                     raise PrintFailed(str(e)) from e
             except PrinterError:
                 raise
             except Exception as e:
-                log.error("event=print_fail job=%s req_id=%s error=%s", job, req_id, e)
+                log.error("event=print_fail req=%s kind=%s error=%s", req_id, job, e)
                 raise PrintFailed(str(e)) from e
         finally:
             if settle_s > 0 and started:
-                log.info(
-                    "event=print_mech_settle job=%s req_id=%s settle_s=%s",
-                    job,
+                log.debug(
+                    "event=print_mech_settle req=%s kind=%s settle_s=%s",
                     req_id,
+                    job,
                     round(settle_s, 1),
                 )
                 time.sleep(settle_s)
-    log.info("event=print_ok job=%s req_id=%s", job, req_id)
+    # Success is logged by the spool as event=printed (includes settle/height).
 
 
 def print_raster(job: str, req_id: str, img, *, settle_s: float = 0.0) -> None:
@@ -282,10 +282,10 @@ def _run_session_settled(job: str, req_id: str, fn: Callable) -> None:
             if not is_busy_error(e) or attempt >= attempts:
                 raise
             log.warning(
-                "event=print_busy_settle job=%s req_id=%s attempt=%s/%s error=%s "
+                "event=print_busy_settle req=%s kind=%s attempt=%s/%s error=%s "
                 "sleep_s=%s",
-                job,
                 req_id,
+                job,
                 attempt,
                 attempts,
                 e,

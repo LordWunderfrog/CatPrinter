@@ -308,7 +308,7 @@ def _batches_with_images(
             )
             continue
         if posts:
-            log.info(
+            log.debug(
                 "event=listing_ok source=%s subreddit=%s posts=%s attempt=%s before=%s",
                 name,
                 sub,
@@ -317,7 +317,7 @@ def _batches_with_images(
                 before,
             )
             return posts
-        log.info(
+        log.debug(
             "event=listing_batch_empty source=%s subreddit=%s attempt=%s before=%s",
             name,
             sub,
@@ -339,7 +339,7 @@ def list_hot_image_posts(
 
     cached = _cache_get(sub)
     if cached:
-        log.info(
+        log.debug(
             "event=listing_ok source=cache subreddit=%s posts=%s",
             sub,
             len(cached),

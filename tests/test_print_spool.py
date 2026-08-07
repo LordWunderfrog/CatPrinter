@@ -17,7 +17,7 @@ def test_submit_persists_files(tmp_path, monkeypatch):
     monkeypatch.setattr("print_spool.print_raster", fake_print)
     monkeypatch.setattr("print_spool._mech_settle_s", lambda h: 0)
     spool = PrintSpool(root=tmp_path / "spool", maxsize=4)
-    job_id = spool.submit(
+    job_id, _depth = spool.submit(
         kind="reddit",
         req_id="abc",
         image=PIL.Image.new("1", (8, 8), 1),
@@ -52,7 +52,7 @@ def test_park_on_sleepy_keeps_job(tmp_path, monkeypatch):
     spool = PrintSpool(root=tmp_path / "spool", maxsize=4)
     monkeypatch.setattr(spool, "drain_async", lambda **k: None)
     monkeypatch.setattr(spool, "_arm_sleepy_retry", lambda: None)
-    job_id = spool.submit(
+    job_id, _depth = spool.submit(
         kind="reddit",
         req_id="x",
         image=PIL.Image.new("1", (4, 4), 1),

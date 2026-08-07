@@ -87,7 +87,7 @@ class PrintSpool:
         req_id: str,
         image: PIL.Image.Image,
         meta: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> tuple[str, int]:
         self._expire_old()
         if self.pending_count() >= self.maxsize:
             raise QueueFull(f"Print spool full ({self.maxsize})")
@@ -115,16 +115,10 @@ class PrintSpool:
                 p.unlink(missing_ok=True)
             raise
 
-        log.info(
-            "event=spool_enqueue job_id=%s kind=%s req_id=%s depth=%s",
-            job_id,
-            kind,
-            req_id,
-            self.pending_count(),
-        )
+        depth = self.pending_count()
         # Opportunistic: try now if the printer happens to be up (non-blocking).
         self.drain_async(reason="enqueue")
-        return job_id
+        return job_id, depth
 
     def drain_async(self, *, reason: str) -> None:
         if self.pending_count() == 0:
@@ -145,7 +139,7 @@ class PrintSpool:
         so status/wake probes cannot interrupt mid-page.
         """
         if not self._drain_lock.acquire(blocking=False):
-            log.info("event=spool_drain_skip reason=%s detail=already_draining", reason)
+            log.debug("event=spool_drain_skip reason=%s detail=already_draining", reason)
             return {"ok": True, "drained": 0, "skipped": True}
 
         drained = 0
@@ -228,28 +222,35 @@ class PrintSpool:
                         time.time() - float(payload.get("enqueued_at") or time.time())
                     )
                     log.info(
-                        "event=spool_print_ok job_id=%s kind=%s req_id=%s waited_s=%s "
-                        "reason=%s settle_s=%s height=%s",
+                        "event=printed req=%s job=%s kind=%s height=%s settle_s=%s "
+                        "waited_s=%s depth=%s",
+                        req_id,
                         job_id,
                         kind,
-                        req_id,
-                        waited,
-                        reason,
-                        round(settle, 1),
                         height,
+                        round(settle, 1),
+                        waited,
+                        max(0, self.pending_count() - 1),
                     )
                     self._drop(job_id)
                     drained += 1
         finally:
             self._drain_lock.release()
 
-        log.info(
-            "event=spool_drain_done reason=%s drained=%s stopped=%s depth=%s",
-            reason,
-            drained,
-            stopped or "empty",
-            self.pending_count(),
-        )
+        if drained or stopped:
+            log.info(
+                "event=spool_drain_done reason=%s drained=%s stopped=%s depth=%s",
+                reason,
+                drained,
+                stopped or "empty",
+                self.pending_count(),
+            )
+        else:
+            log.debug(
+                "event=spool_drain_done reason=%s drained=0 stopped=empty depth=%s",
+                reason,
+                self.pending_count(),
+            )
         return {
             "ok": True,
             "drained": drained,

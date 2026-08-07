@@ -10,10 +10,11 @@ Printer MAC: `25:00:27:00:1B:D5`. API on HA host `:8080`. Default subreddit: `wu
 
 ## Current shipped version
 
-**1.1.19** (`ha-addon/config.yaml`). On share after deploy + Rebuild/Update. Confirm in HA: **Settings → Apps → Cat Printer**.
+**1.1.20** (`ha-addon/config.yaml`). On share after deploy + Rebuild/Update. Confirm in HA: **Settings → Apps → Cat Printer**.
 
 Recent commits:
 
+- (pending) 1.1.20 — quieter, non-duplicated logs; `queued`/`printed` correlated by req+job
 - `15b5295` — listing batches of 20; retry random `before` window if no stills
 - `9a709e8` — Arctic without `url=` (was 422 timeout); RSS fallback; listing cache
 - `24927ea` — Arctic Shift listing (Pullpush fallback); Pullpush alone was 502
@@ -77,12 +78,12 @@ Optional local layout: gitignored `.ha/` symlinks to UNC shares (see below). `.h
 
 Log excerpt (share `addon.log`):
 
-- `spool_enqueue … depth=1` then `depth=2` + `spool_drain_skip … already_draining`
-- `print_mech_settle … settle_s=23.1` / `16.1` (height 578 / 403)
-- `spool_print_ok` ×2 then `spool_drain_done … drained=2 stopped=empty depth=0`
-- During settle, status probes stay off the RFCOMM path as designed
+- `event=queued req=… job=… kind=reddit depth=1` then `depth=2`
+- `event=printed req=… job=… settle_s=… height=…`
+- `event=spool_drain_done … drained=2 … depth=0`
+- Routine `/status` awake polls are silent at INFO
 
-Printer is slow by nature; settle at ~25 px/s is intentionally conservative (prefer gap over smash).
+Note: a tap that never reaches `/print/reddit` (HA REST/NFC miss) is not a queue bug — only `event=queued` counts.
 
 ### If smash returns
 
@@ -94,10 +95,9 @@ Physical: full prints, clear gap, no mid-page cutover.
 
 Logs should show:
 
-- `spool_print_ok … settle_s=… height=…`
-- `print_mech_settle … settle_s=…`
-- During drain: `probe printer=busy` (not `awake`) when status is polled mid-job
-- `spool_drain_done … drained=N stopped=empty depth=0`
+- `event=queued … depth=…`
+- `event=printed … settle_s=… height=…`
+- `event=spool_drain_done … drained=N … depth=0`
 
 ### How to re-test
 
@@ -106,8 +106,6 @@ Logs should show:
 3. Read live log: `\\home.lan\share\cat_printer\addon.log` (or `.ha\share\...`)
 4. Read logs before burning more labels
 
-Note: a tap that never reaches `/print/reddit` (HA REST/NFC miss) is not a queue bug — only `spool_enqueue` counts.
-
 ## HA package notes
 
 `ha/cat_printer.yaml`: NFC automation `mode: queued`, `max: 10`; status poll `scan_interval: 120`; tag id `fb7b4343-d943-4aa5-ac78-4b640d98bca5`. Secret `cat_printer_api_token` in `secrets.yaml` (can be `""`).
@@ -115,7 +113,7 @@ Note: a tap that never reaches `/print/reddit` (HA REST/NFC miss) is not a queue
 ## Don’ts / traps
 
 - Extra `PRINT_FEED_LINES` as a smash “fix” — user rejected; burns plastic label stock
-- Treating `print_start` as printer start — it’s HTTP fetch/render; spool order is `spool_enqueue` / `spool_print_ok`
+- Treating `print_start` / HTTP accept as printer start — glanceable order is `event=queued` → `event=printed`
 - Deploying without Rebuild
 - Committing `dist/`, secrets, `CodeReviewTemp.md` / `Review2.md` (junk)
 - Cloud Cursor agent expecting `N:`/`S:` — those are on the home PC. Use **This PC (Remote Control)** with PC awake, or dump logs to `/config`

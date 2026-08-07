@@ -46,8 +46,6 @@ from yhk_printer import create_text_image, get_config
 
 _log_file = configure_logging()
 log = logging.getLogger("cat_printer.api")
-if _log_file:
-    log.info("event=log_file path=%s", _log_file)
 
 # Crash-level ceilings only — normal receipts/photos sail under these.
 MAX_TEXT_CHARS = int(os.environ.get("MAX_TEXT_CHARS", str(50_000)))
@@ -103,6 +101,13 @@ def _compose_captioned_image(
     return out
 
 
+def _clip(text: str, n: int = 48) -> str:
+    text = (text or "").replace("\n", " ").strip()
+    if len(text) <= n:
+        return text
+    return text[: n - 1] + "…"
+
+
 def _maybe_drain_after_probe(body: dict, *, reason: str) -> None:
     if body.get("printer") in ("awake", "busy"):
         print_spool.drain_async(reason=reason)
@@ -113,14 +118,14 @@ async def lifespan(_app: FastAPI):
     cfg = get_config()
     token_on = bool(_api_token())
     log.info(
-        "event=startup printer_mac=%s printer_port=%s auth=%s default_subreddit=%s "
-        "spool=%s queue_max=%s",
+        "event=startup mac=%s port=%s auth=%s sub=%s spool=%s queue_max=%s log=%s",
         cfg["mac"],
         cfg["port"],
         "on" if token_on else "off",
         _default_subreddit(),
         print_spool.stats()["spool_dir"],
         print_spool.maxsize,
+        _log_file or "-",
     )
     # Rebuild/restart: try once if the cat is already up.
     print_spool.drain_async(reason="startup")
@@ -147,6 +152,11 @@ def _path_requires_auth(path: str) -> bool:
     return path.startswith("/print") or path == "/printer/wake"
 
 
+def _quiet_http_path(path: str) -> bool:
+    """Health/status polls and successful print accepts log themselves elsewhere."""
+    return path in ("/health", "/ready", "/status") or path.startswith("/print")
+
+
 def _enqueue_or_http(
     kind: str,
     req_id: str,
@@ -155,9 +165,21 @@ def _enqueue_or_http(
 ) -> JSONResponse:
     """Spool a prepared raster. Printer offline is not a reject."""
     try:
-        job_id = print_spool.submit(kind=kind, req_id=req_id, image=img, meta=extra)
+        job_id, depth = print_spool.submit(
+            kind=kind, req_id=req_id, image=img, meta=extra
+        )
     except QueueFull as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
+    bits = [
+        f"event=queued req={req_id} job={job_id} kind={kind} depth={depth}",
+    ]
+    if extra.get("subreddit"):
+        bits.append(f"sub={extra['subreddit']}")
+    if extra.get("title"):
+        bits.append(f"title={_clip(str(extra['title']))!r}")
+    if extra.get("filename"):
+        bits.append(f"file={extra['filename']}")
+    log.info(" ".join(bits))
     body = {
         "ok": True,
         "queued": True,
@@ -184,7 +206,7 @@ async def auth_and_request_log(request: Request, call_next):
             )
             if not got or not secrets.compare_digest(got, expected):
                 log.warning(
-                    "event=auth_denied req_id=%s path=%s client=%s",
+                    "event=auth_denied req=%s path=%s client=%s",
                     req_id,
                     path,
                     request.client.host if request.client else "-",
@@ -196,8 +218,11 @@ async def auth_and_request_log(request: Request, call_next):
 
     response = await call_next(request)
     ms = int((time.perf_counter() - started) * 1000)
+    # Skip routine HA polls and successful /print/* (those emit event=queued).
+    if _quiet_http_path(path) and response.status_code < 400:
+        return response
     log.info(
-        "event=request req_id=%s method=%s path=%s status=%s duration_ms=%s",
+        "event=http req=%s %s %s status=%s %sms",
         req_id,
         request.method,
         path,
@@ -259,12 +284,6 @@ def printer_wake():
 def print_text_endpoint(request: Request, body: TextPrintRequest):
     req_id = getattr(request.state, "req_id", "-")
     cfg = get_config()
-    log.info(
-        "event=print_start job=text req_id=%s chars=%s font_size=%s",
-        req_id,
-        len(body.text),
-        body.font_size,
-    )
     try:
         img = create_text_image(
             body.text,
@@ -275,18 +294,13 @@ def print_text_endpoint(request: Request, body: TextPrintRequest):
         ).convert("1")
     except ValueError as e:
         raise HTTPException(status_code=413, detail=str(e)) from e
-    return _enqueue_or_http("text", req_id, img)
+    return _enqueue_or_http("text", req_id, img, chars=len(body.text))
 
 
 @app.post("/print/markdown")
 def print_markdown_endpoint(request: Request, body: MarkdownPrintRequest):
     req_id = getattr(request.state, "req_id", "-")
     cfg = get_config()
-    log.info(
-        "event=print_start job=markdown req_id=%s chars=%s",
-        req_id,
-        len(body.markdown),
-    )
     try:
         img = render_markdown(
             body.markdown,
@@ -296,13 +310,13 @@ def print_markdown_endpoint(request: Request, body: MarkdownPrintRequest):
             max_height=MAX_RENDER_HEIGHT,
         )
     except RenderTooTall as e:
-        log.warning("event=render_too_tall job=markdown req_id=%s error=%s", req_id, e)
+        log.warning("event=render_too_tall req=%s error=%s", req_id, e)
         raise HTTPException(status_code=413, detail=str(e)) from e
     except Exception as e:
-        log.error("event=render_fail job=markdown req_id=%s error=%s", req_id, e)
+        log.error("event=render_fail req=%s error=%s", req_id, e)
         raise HTTPException(status_code=500, detail=f"Markdown render failed: {e}") from e
 
-    return _enqueue_or_http("markdown", req_id, img)
+    return _enqueue_or_http("markdown", req_id, img, chars=len(body.markdown))
 
 
 @app.post("/print/image")
@@ -331,16 +345,15 @@ def print_image_endpoint(request: Request, file: UploadFile = File(...)):
         )
 
     cfg = get_config()
-    log.info(
-        "event=print_start job=image req_id=%s filename=%s bytes=%s size=%sx%s",
-        req_id,
-        file.filename,
-        len(raw),
-        w,
-        h,
-    )
     prepared = prepare_raster_image(img, cfg["width"]).convert("1")
-    return _enqueue_or_http("image", req_id, prepared, filename=file.filename)
+    return _enqueue_or_http(
+        "image",
+        req_id,
+        prepared,
+        filename=file.filename,
+        bytes=len(raw),
+        size=f"{w}x{h}",
+    )
 
 
 @app.post("/print/reddit")
@@ -352,7 +365,6 @@ def print_reddit_endpoint(
     req_id = getattr(request.state, "req_id", "-")
     sub = (body.subreddit if body and body.subreddit else None) or _default_subreddit()
     cfg = get_config()
-    log.info("event=print_start job=reddit req_id=%s subreddit=%s", req_id, sub)
 
     try:
         img, post = fetch_random_subreddit_image(
@@ -361,10 +373,10 @@ def print_reddit_endpoint(
             max_pixels=MAX_IMAGE_PIXELS,
         )
     except RedditImageError as e:
-        log.error("event=fetch_fail job=reddit req_id=%s error=%s", req_id, e)
+        log.error("event=fetch_fail req=%s kind=reddit sub=%s error=%s", req_id, sub, e)
         raise HTTPException(status_code=502, detail=str(e)) from e
     except Exception as e:
-        log.error("event=fetch_fail job=reddit req_id=%s error=%s", req_id, e)
+        log.error("event=fetch_fail req=%s kind=reddit sub=%s error=%s", req_id, sub, e)
         raise HTTPException(status_code=500, detail=f"Reddit fetch failed: {e}") from e
 
     prepared = _compose_captioned_image(
@@ -381,29 +393,20 @@ def print_reddit_endpoint(
                 f"max {MAX_RENDER_HEIGHT}px)"
             ),
         )
-    title = post.get("title", "")
-    url = post.get("url", "")
-    log.info(
-        "event=reddit_picked req_id=%s subreddit=%s title=%r url=%s",
-        req_id,
-        sub,
-        title[:80],
-        url,
-    )
     return _enqueue_or_http(
         "reddit",
         req_id,
         prepared,
         subreddit=sub.lstrip("r/").strip("/"),
-        title=title,
-        url=url,
+        title=post.get("title") or "",
+        url=post.get("url") or "",
     )
 
 
 def main():
     host = os.environ.get("API_HOST", "0.0.0.0")
     port = int(os.environ.get("API_PORT", "8080"))
-    uvicorn.run("api:app", host=host, port=port, reload=False)
+    uvicorn.run("api:app", host=host, port=port, reload=False, access_log=False)
 
 
 if __name__ == "__main__":
