@@ -65,34 +65,73 @@ def test_list_prefers_arctic_over_pullpush(monkeypatch):
             }
         ]
 
+    def rss(sub, limit):
+        calls.append("rss")
+        return [{"title": "rss", "url": "https://i.redd.it/r.jpg", "permalink": ""}]
+
     def pullpush(sub, limit):
         calls.append("pullpush")
         return [{"title": "nope", "url": "https://i.redd.it/y.jpg", "permalink": ""}]
 
     monkeypatch.setattr("reddit_image._fetch_arctic_shift", arctic)
+    monkeypatch.setattr("reddit_image._fetch_reddit_rss", rss)
     monkeypatch.setattr("reddit_image._fetch_pullpush", pullpush)
+    monkeypatch.setattr("reddit_image._listing_cache", {})
     posts = list_hot_image_posts("wunkus", limit=10)
     assert posts[0]["title"] == "wunk"
     assert calls == ["arctic"]
 
 
-def test_list_falls_back_to_pullpush(monkeypatch):
+def test_list_falls_back_to_rss_then_pullpush(monkeypatch):
     def arctic(sub, limit):
         raise RedditImageError("Arctic Shift listing failed for r/wunkus: boom")
 
+    def rss(sub, limit):
+        return [{"title": "rss", "url": "https://i.redd.it/z.png", "permalink": ""}]
+
     def pullpush(sub, limit):
-        return [{"title": "fallback", "url": "https://i.redd.it/z.png", "permalink": ""}]
+        return [{"title": "fallback", "url": "https://i.redd.it/p.png", "permalink": ""}]
 
     monkeypatch.setattr("reddit_image._fetch_arctic_shift", arctic)
+    monkeypatch.setattr("reddit_image._fetch_reddit_rss", rss)
     monkeypatch.setattr("reddit_image._fetch_pullpush", pullpush)
+    monkeypatch.setattr("reddit_image._listing_cache", {})
     posts = list_hot_image_posts("wunkus")
-    assert posts[0]["title"] == "fallback"
+    assert posts[0]["title"] == "rss"
+
+
+def test_list_uses_cache(monkeypatch):
+    calls = {"n": 0}
+
+    def arctic(sub, limit):
+        calls["n"] += 1
+        return [{"title": "cached", "url": "https://i.redd.it/c.jpg", "permalink": ""}]
+
+    monkeypatch.setattr("reddit_image._fetch_arctic_shift", arctic)
+    monkeypatch.setattr(
+        "reddit_image._fetch_reddit_rss",
+        lambda *a, **k: (_ for _ in ()).throw(RedditImageError("skip")),
+    )
+    monkeypatch.setattr(
+        "reddit_image._fetch_pullpush",
+        lambda *a, **k: (_ for _ in ()).throw(RedditImageError("skip")),
+    )
+    monkeypatch.setattr("reddit_image._listing_cache", {})
+    monkeypatch.setattr("reddit_image.LISTING_CACHE_TTL_S", 60.0)
+    assert list_hot_image_posts("wunkus")[0]["title"] == "cached"
+    assert list_hot_image_posts("wunkus")[0]["title"] == "cached"
+    assert calls["n"] == 1
 
 
 def test_list_both_fail(monkeypatch):
+    monkeypatch.setattr("reddit_image._listing_cache", {})
     monkeypatch.setattr(
         "reddit_image._fetch_arctic_shift",
         lambda *a, **k: (_ for _ in ()).throw(RedditImageError("arctic down")),
+    )
+    monkeypatch.setattr(
+        "reddit_image._fetch_reddit_rss",
+        lambda *a, **k: (_ for _ in ()).throw(RedditImageError("rss down")),
     )
     monkeypatch.setattr(
         "reddit_image._fetch_pullpush",
@@ -100,3 +139,30 @@ def test_list_both_fail(monkeypatch):
     )
     with pytest.raises(RedditImageError, match="No direct image posts"):
         list_hot_image_posts("wunkus")
+
+
+def test_rss_parses_embedded_images(monkeypatch):
+    atom = """<?xml version="1.0" encoding="UTF-8"?>
+    <feed xmlns="http://www.w3.org/2005/Atom">
+      <entry>
+        <title>drunkus</title>
+        <link href="https://www.reddit.com/r/wunkus/comments/x/"/>
+        <content type="html">&lt;img src="https://i.redd.it/yjguxx6nvyhh1.jpeg"&gt;</content>
+      </entry>
+      <entry>
+        <title>video</title>
+        <link href="https://www.reddit.com/r/wunkus/comments/y/"/>
+        <content type="html">https://v.redd.it/abc</content>
+      </entry>
+    </feed>
+    """
+
+    monkeypatch.setattr(
+        "reddit_image._http_get_text",
+        lambda url, headers, timeout=20.0: atom,
+    )
+    from reddit_image import _fetch_reddit_rss
+
+    posts = _fetch_reddit_rss("wunkus", 10)
+    assert len(posts) == 1
+    assert posts[0]["url"].endswith(".jpeg")
