@@ -5,6 +5,7 @@ venv/
 .env
 *.egg-info/
 .pytest_cache/
+.reddit_cache/
 dist/
 .spool/
 _md_preview.png
