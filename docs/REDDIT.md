@@ -45,7 +45,8 @@ Layout:
 {REDDIT_CACHE_DIR}/{subreddit}/{id}.json   # title, url, permalink
 ```
 
-Defaults: `/data/reddit_cache` on the add-on, else repo `.reddit_cache`.  
+Add-on default: `/share/cat_printer/reddit_cache` (Samba: `\\home.lan\share\cat_printer\reddit_cache`).  
+Fallback: `/data/reddit_cache` if `/share` is missing; locally `.reddit_cache`.  
 Disable: `REDDIT_CACHE_ENABLED=0`.
 
 ### Flow (`fetch_random_subreddit_image`)
@@ -92,7 +93,7 @@ event=queued … kind=reddit …
 | Symptom | Likely cause |
 |---------|----------------|
 | HTTP **502** on `/print/reddit` | All listing sources failed, or zero usable downloads |
-| Always refill every tap | Cache disabled, wrong sub name each time, or `/data` not writable |
+| Always refill every tap | Cache disabled, wrong sub name each time, or cache dir not writable |
 | Private-IP URL rejected | SSRF guard working as designed |
 | Empty after fill `stored=0` | Listing had no stills (retries / `before` window); or downloads failed |
 

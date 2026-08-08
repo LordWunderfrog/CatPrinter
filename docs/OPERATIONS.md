@@ -6,8 +6,9 @@
 |-----|------------|--------------------|
 | Job / ops | `\\home.lan\share\cat_printer\addon.log` | `queued`, `printed`, spool_*, `printer_state` transitions, wake_*, fetch/render failures |
 | Probe history | `\\home.lan\share\cat_printer\probe.log` | **Every** probe including awake: `duration_ms`, `idle_s` when known |
+| Reddit still cache | `\\home.lan\share\cat_printer\reddit_cache\{sub}\` | `{id}.png` + `{id}.json` per cached still |
 
-Both rotate (~2 MiB × 3 backups) under `share:rw`. Env: `LOG_FILE`, `PROBE_LOG_FILE`.
+Logs rotate (~2 MiB × 3 backups) under `share:rw`. Env: `LOG_FILE`, `PROBE_LOG_FILE`, `REDDIT_CACHE_DIR`.
 
 If `.ha/share` junctions exist: `.ha\share\cat_printer\addon.log`.
 
@@ -135,16 +136,16 @@ Defaults are what the code uses when the env var is unset. Add-on options only c
 
 ### Logging / reddit
 
-| Variable | Default |
-|----------|---------|
-| `LOG_FILE` | add-on: `/share/cat_printer/addon.log` |
-| `PROBE_LOG_FILE` | add-on: `/share/cat_printer/probe.log` |
-| `REDDIT_CACHE_DIR` | `/data/reddit_cache` or `.reddit_cache` |
-| `REDDIT_CACHE_ENABLED` | `1` |
-| `REDDIT_LISTING_CACHE_TTL_S` | `300` |
-| `REDDIT_LISTING_BATCH_SIZE` | `20` |
-| `REDDIT_LISTING_BATCH_ATTEMPTS` | `5` |
-| `REDDIT_LISTING_LOOKBACK_DAYS` | `365` |
+| Variable | Default | Notes |
+|----------|---------|--------|
+| `LOG_FILE` | `/share/cat_printer/addon.log` | Samba job log |
+| `PROBE_LOG_FILE` | `/share/cat_printer/probe.log` | Every probe |
+| `REDDIT_CACHE_DIR` | `/share/cat_printer/reddit_cache` | Samba: `\\home.lan\share\cat_printer\reddit_cache` |
+| `REDDIT_CACHE_ENABLED` | `1` | |
+| `REDDIT_LISTING_CACHE_TTL_S` | `300` | |
+| `REDDIT_LISTING_BATCH_SIZE` | `20` | |
+| `REDDIT_LISTING_BATCH_ATTEMPTS` | `5` | |
+| `REDDIT_LISTING_LOOKBACK_DAYS` | `365` | |
 
 `KEEP_AWAKE` is **not** implemented — proposed only in [PARKED.md](PARKED.md).
 

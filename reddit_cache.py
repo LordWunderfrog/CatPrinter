@@ -30,6 +30,9 @@ def _default_cache_dir() -> Path:
     env = (os.environ.get("REDDIT_CACHE_DIR") or "").strip()
     if env:
         return Path(env)
+    # Prefer Samba-visible share on HA (same folder as addon.log).
+    if Path("/share").is_dir():
+        return Path("/share/cat_printer/reddit_cache")
     if Path("/data").is_dir():
         return Path("/data/reddit_cache")
     return Path(__file__).resolve().parent / ".reddit_cache"

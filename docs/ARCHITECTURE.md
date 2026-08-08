@@ -85,7 +85,7 @@ A tap that never hits `/print/reddit` (HA REST/NFC miss) is **not** a queue bug 
 | Path | Purpose | Survives rebuild? |
 |------|---------|-------------------|
 | `/data/spool/` | Pending print jobs | Yes (`/data`) |
-| `/data/reddit_cache/{sub}/` | Cached stills per subreddit | Yes |
+| `/share/cat_printer/reddit_cache/{sub}/` | Cached stills per subreddit | Yes (`share:rw`; Samba) |
 | `/share/cat_printer/addon.log` | Job / ops log | Yes (`share:rw`) |
 | `/share/cat_printer/probe.log` | Every probe incl. awake | Yes |
 

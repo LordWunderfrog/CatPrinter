@@ -72,7 +72,7 @@ Slug is **`local_cat_printer`**, not the display name, not bare `cat_printer`.
 | `api_token` | `""` | `API_TOKEN` |
 | `default_subreddit` | `wunkus` | `DEFAULT_SUBREDDIT` |
 
-`run.sh` also sets `API_HOST=0.0.0.0`, `LOG_FILE=/share/cat_printer/addon.log`, `PROBE_LOG_FILE=/share/cat_printer/probe.log`.
+`run.sh` also sets `API_HOST=0.0.0.0`, `LOG_FILE=/share/cat_printer/addon.log`, `PROBE_LOG_FILE=/share/cat_printer/probe.log`, `REDDIT_CACHE_DIR=/share/cat_printer/reddit_cache` (migrates an empty-share case from `/data/reddit_cache` once).
 
 Add-on flags of note: `host_network: true`, `usb: true`, privileged `NET_ADMIN` / `NET_RAW` / `SYS_ADMIN`, `map: share:rw`.
 

@@ -7,7 +7,7 @@ Typical path: NFC tap → HA package → `POST /print/reddit` → disk spool →
 | | |
 |---|---|
 | Repo | `LordWunderfrog/CatPrinter` |
-| Shipped add-on version | **1.1.23** (`ha-addon/config.yaml`) |
+| Shipped add-on version | **1.1.24** (`ha-addon/config.yaml`) |
 | Default printer MAC | `25:00:27:00:1B:D5` |
 | API | HA host `:8080` |
 | Default subreddit | `wunkus` |
@@ -113,7 +113,7 @@ HTTP 202 alone is **not** proof of paper out.
 
 **Finished / signed off** (2026-08-08). Hardware acceptance: multi-tap queue, Reddit path (incl. named sub), cache, settle — confirmed on label stock. Final ritual: `POST /print/reddit` → `r/boobs` → boobs on paper.
 
-Shipped add-on **1.1.23**. Only open thread is optional keep-awake work in [docs/PARKED.md](docs/PARKED.md) — revisit only if sleepy becomes painful again.
+Shipped add-on **1.1.24**. Only open thread is optional keep-awake work in [docs/PARKED.md](docs/PARKED.md) — revisit only if sleepy becomes painful again.
 
 ---
 

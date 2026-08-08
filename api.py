@@ -13,7 +13,7 @@ Env (in addition to yhk_printer / printer_service):
   MAX_RENDER_HEIGHT, MAX_PRINT_QUEUE, PRINT_SPOOL_DIR, SPOOL_TTL_S
   LOG_FILE — job log (add-on default: /share/cat_printer/addon.log)
   PROBE_LOG_FILE — awake/probe history (default: beside LOG_FILE as probe.log)
-  REDDIT_CACHE_DIR — per-sub still cache (default /data/reddit_cache)
+  REDDIT_CACHE_DIR — per-sub still cache (add-on default /share/cat_printer/reddit_cache)
   REDDIT_CACHE_ENABLED — 1/0 (default on)
 
 Print routes write a raster to the disk spool and return 202. Drain runs

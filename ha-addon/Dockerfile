@@ -21,6 +21,7 @@ ENV API_PORT=8080
 ENV PRINTER_FONT=/app/Lucon.ttf
 ENV LOG_FILE=/share/cat_printer/addon.log
 ENV PROBE_LOG_FILE=/share/cat_printer/probe.log
+ENV REDDIT_CACHE_DIR=/share/cat_printer/reddit_cache
 
 EXPOSE 8080
 
