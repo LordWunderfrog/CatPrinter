@@ -1,6 +1,6 @@
 # Parked work — keep-awake / sleep
 
-**Status:** Parked (2026-08). Queue/settle and Reddit cache are done. Sleep is workable via 120s status polls + HA bounded revive + power button. Revisit only if sleepy becomes painful again.
+**Status:** Parked (2026-08). Project otherwise **signed off finished** (2026-08-08). Sleep is workable via 120s status polls + HA bounded revive + power button. Revisit only if sleepy becomes painful again.
 
 Do **not** implement Phase B without fresh measurements and an explicit user go-ahead.
 

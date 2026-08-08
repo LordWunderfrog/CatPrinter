@@ -13,6 +13,7 @@ YHK Classic Bluetooth thermal printer HTTP API for Home Assistant OS.
 | Repo path | `C:\Users\AranFroggatt\PythonProjects\CatPrinter` |
 | Branch | `main` |
 | Add-on version | **1.1.23** (`ha-addon/config.yaml`) |
+| Project status | **Finished / signed off** (2026-08-08) |
 | Printer MAC | `25:00:27:00:1B:D5` |
 | API | HA host `:8080` |
 | Default sub | `wunkus` |

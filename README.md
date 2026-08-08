@@ -108,19 +108,11 @@ HTTP 202 alone is **not** proof of paper out.
 
 ---
 
-## Status of the system (as of 1.1.23)
+## Status
 
-**Working and considered done for now**
+**Finished / signed off** (2026-08-08). Hardware acceptance: multi-tap queue, Reddit path (incl. named sub), cache, settle — confirmed on label stock. Final ritual: `POST /print/reddit` → `r/boobs` → boobs on paper.
 
-- Multi-tap queue + mechanical settle (no mid-page cutover when settle is sane)
-- Reddit listings (Arctic Shift → RSS → Pullpush) + per-sub disk image cache
-- Samba job log + separate probe history log
-- HA status poll (120s), bounded revive, NFC `mode: queued`
-- SSRF guards on outbound image fetches; pinned `requirements.txt`
-
-**Parked (do not “finish” unless sleepy becomes painful again)**
-
-- Keep-awake / sleep deprivation — see [docs/PARKED.md](docs/PARKED.md)
+Shipped add-on **1.1.23**. Only open thread is optional keep-awake work in [docs/PARKED.md](docs/PARKED.md) — revisit only if sleepy becomes painful again.
 
 ---
 
