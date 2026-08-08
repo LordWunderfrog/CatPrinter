@@ -24,7 +24,8 @@ YHK Classic Bluetooth thermal printer HTTP API for Home Assistant OS.
 | Need | Doc |
 |------|-----|
 | Modules + print/settle pipeline | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| HTTP routes (caller contract) | [docs/API.md](docs/API.md) |
+| Caller contract (build integrations here) | [docs/CALLERS.md](docs/CALLERS.md) |
+| HTTP routes (maintainer reference) | [docs/API.md](docs/API.md) |
 | Pack / Samba / Rebuild | [docs/DEPLOY.md](docs/DEPLOY.md) |
 | Logs, env, smash checklist | [docs/OPERATIONS.md](docs/OPERATIONS.md) |
 | Reddit listing + cache | [docs/REDDIT.md](docs/REDDIT.md) |

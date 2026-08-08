@@ -20,7 +20,8 @@ Typical path: NFC tap → HA package → `POST /print/reddit` → disk spool →
 |-----|----------|----------|
 | [AGENTS.md](AGENTS.md) | Cursor / remote agents | Short briefing, traps, where to look |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Dev / agent | Modules, print pipeline, locks, settle |
-| [docs/API.md](docs/API.md) | **Callers** | Endpoints, params, status codes, examples (no internals) |
+| [docs/CALLERS.md](docs/CALLERS.md) | **Callers** | Endpoints, params, status codes, which hostname to use |
+| [docs/API.md](docs/API.md) | Maintainers | Route reference with ops/context notes |
 | [docs/DEPLOY.md](docs/DEPLOY.md) | Ops | Pack, Samba paths, Rebuild, HA package |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Ops / debug | Logs, NFC smash checklist, env reference |
 | [docs/REDDIT.md](docs/REDDIT.md) | Dev | Listing sources, disk cache, SSRF |

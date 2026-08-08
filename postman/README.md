@@ -11,5 +11,9 @@ Open the Postman extension → sync/pull → select environment → **Health**, 
 
 Variables: `baseUrl`, `api_token` (secret, optional), `subreddit` (default `wunkus`).
 
-API contract (source of truth): [docs/API.md](../docs/API.md).  
+Caller contract: [docs/CALLERS.md](../docs/CALLERS.md).  
+Maintainer route notes: [docs/API.md](../docs/API.md).
+
+Environments: use `home.lan` for LAN-only; `print.wunderfrog.com` for anything externally exposed or standalone; `localhost` for a local `python api.py`.
+
 Auth: when the add-on token is set, send `X-Api-Key` on `/print/*` and `/printer/wake`. `/health` and `/status` stay open.
